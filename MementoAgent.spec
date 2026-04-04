@@ -1,0 +1,63 @@
+# -*- mode: python ; coding: utf-8 -*-
+
+
+a = Analysis(
+    ['main.py'],
+    pathex=[],
+    binaries=[],
+    datas=[
+        ('assets', 'assets'),
+        ('monitoring/coupe_2pouces/Cx2Stat64.dll', 'monitoring/coupe_2pouces'),
+    ],
+    hiddenimports=[
+        'auth', 'auth.lock_screen',
+        'setup', 'setup.setup_window', 'setup.install_page', 'setup.progress_page', 'setup.config_page', 'setup.styles',
+        'settings', 'settings.config', 'settings.settings_widget', 'settings.widgets', 'settings.worker',
+        'alertes', 'alertes.alertes_widget', 'alertes.data', 'alertes.filters', 'alertes.filter_bar', 'alertes.stats', 'alertes.stat_cards', 'alertes.table',
+        'monitoring', 'monitoring.engine', 'monitoring.emmento', 'monitoring.drive_backup', 'monitoring.cashinterface',
+        'monitoring.collectors', 'monitoring.collectors.heartbeat', 'monitoring.collectors.printer', 'monitoring.collectors.system',
+        'monitoring.alertes', 'monitoring.alertes.alertes_monitor', 'monitoring.alertes.constants',
+        'monitoring.coupe_2pouces', 'monitoring.coupe_2pouces.coupe', 'monitoring.coupe_2pouces.activer_coupe_2pouces', 'monitoring.coupe_2pouces.desactiver_coupe_2pouces',
+        'dashboard', 'paths', 'version', 'supabase_client', 'TPE', 'ui_components', 'activity_logger', 'user_session', 'touch_scroll', 'rupture_screen',
+        'alertes.activity_table',
+    ],
+    hookspath=[],
+    hooksconfig={},
+    runtime_hooks=[],
+    excludes=[],
+    noarchive=False,
+    optimize=0,
+)
+pyz = PYZ(a.pure)
+
+exe = EXE(
+    pyz,
+    a.scripts,
+    a.binaries,
+    a.datas,
+    [],
+    name='MementoAgent',
+    debug=False,
+    bootloader_ignore_signals=False,
+    strip=False,
+    upx=True,
+    upx_exclude=[
+        'Qt5Core.dll',
+        'Qt5Gui.dll',
+        'Qt5Widgets.dll',
+        'Qt5Svg.dll',
+        'Qt5Network.dll',
+        'Qt5DBus.dll',
+        'Qt5WebSockets.dll',
+        'Qt5Quick.dll',
+        'Qt5Qml.dll',
+    ],
+    runtime_tmpdir=None,
+    console=False,
+    disable_windowed_traceback=False,
+    argv_emulation=False,
+    target_arch=None,
+    codesign_identity=None,
+    entitlements_file=None,
+    icon='assets/logo.ico',
+)

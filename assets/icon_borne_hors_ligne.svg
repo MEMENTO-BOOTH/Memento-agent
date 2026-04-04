@@ -1,0 +1,19 @@
+<svg preserveAspectRatio="none" width="100%" height="100%" overflow="visible" style="display: block;" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
+<g id="Icon Container">
+<circle id="Ellipse 14" cx="16" cy="16" r="16" fill="#EF4444"/>
+<g id="wifi-off" clip-path="url(#clip0_0_4)">
+<path id="Vector" d="M9.58333 9.58333L22.4167 22.4167" stroke="white" stroke-linecap="round" stroke-linejoin="round"/>
+<path id="Vector_2" d="M18.7533 15.4517C19.2311 15.6849 19.6779 15.9768 20.0833 16.3208" stroke="white" stroke-linecap="round" stroke-linejoin="round"/>
+<path id="Vector_3" d="M11.9167 16.3208C12.7812 15.598 13.8218 15.117 14.9325 14.9267" stroke="white" stroke-linecap="round" stroke-linejoin="round"/>
+<path id="Vector_4" d="M15.2475 11.9458C16.4972 11.8451 17.7545 11.9973 18.9441 12.3931C20.1338 12.789 21.2315 13.4205 22.1717 14.25" stroke="white" stroke-linecap="round" stroke-linejoin="round"/>
+<path id="Vector_5" d="M9.82833 14.25C10.6375 13.5347 11.5653 12.9662 12.57 12.57" stroke="white" stroke-linecap="round" stroke-linejoin="round"/>
+<path id="Vector_6" d="M13.9758 18.3975C14.568 17.9768 15.2765 17.7507 16.0029 17.7507C16.7294 17.7507 17.4378 17.9768 18.03 18.3975" stroke="white" stroke-linecap="round" stroke-linejoin="round"/>
+<path id="Vector_7" d="M16 20.6667H16.0058" stroke="white" stroke-linecap="round" stroke-linejoin="round"/>
+</g>
+</g>
+<defs>
+<clipPath id="clip0_0_4">
+<rect width="14" height="14" fill="white" transform="translate(9 9)"/>
+</clipPath>
+</defs>
+</svg>

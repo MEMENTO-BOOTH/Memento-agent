@@ -1,0 +1,14 @@
+<svg preserveAspectRatio="none" width="100%" height="100%" overflow="visible" style="display: block;" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
+<g id="Group 9">
+<circle id="Ellipse 14" cx="16" cy="16" r="16" fill="#EF4444"/>
+<g id="camera-off" clip-path="url(#clip0_0_4)">
+<path id="Vector" d="M9.58333 9.58333L22.4167 22.4167" stroke="white" stroke-linecap="round" stroke-linejoin="round"/>
+<path id="Vector_2" d="M21.25 21.25H10.75C10.4406 21.25 10.1438 21.1271 9.92504 20.9083C9.70625 20.6895 9.58333 20.3928 9.58333 20.0833V13.6667C9.58333 13.3572 9.70625 13.0605 9.92504 12.8417C10.1438 12.6229 10.4406 12.5 10.75 12.5H12.5M14.25 10.75H17.75L18.9167 12.5H21.25C21.5594 12.5 21.8562 12.6229 22.075 12.8417C22.2937 13.0605 22.4167 13.3572 22.4167 13.6667V19.115M17.9133 17.9133C17.7197 18.1963 17.4661 18.4331 17.1706 18.6069C16.8751 18.7807 16.5449 18.8873 16.2036 18.919C15.8622 18.9507 15.518 18.9068 15.1955 18.7904C14.873 18.674 14.5802 18.488 14.3377 18.2456C14.0953 18.0032 13.9093 17.7103 13.7929 17.3878C13.6765 17.0653 13.6326 16.7212 13.6643 16.3798C13.6961 16.0384 13.8026 15.7082 13.9764 15.4127C14.1503 15.1172 14.3871 14.8636 14.67 14.67" stroke="white" stroke-linecap="round" stroke-linejoin="round"/>
+</g>
+</g>
+<defs>
+<clipPath id="clip0_0_4">
+<rect width="14" height="14" fill="white" transform="translate(9 9)"/>
+</clipPath>
+</defs>
+</svg>

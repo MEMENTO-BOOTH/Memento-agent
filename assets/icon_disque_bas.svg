@@ -1,0 +1,10 @@
+<svg preserveAspectRatio="none" width="100%" height="100%" overflow="visible" style="display: block;" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
+<g id="Icon Container">
+<circle id="Ellipse 14" cx="16" cy="16" r="16" fill="#F59E0B"/>
+<g id="save">
+<path id="Vector" d="M19.5 20.5H12.5C12.2348 20.5 11.9804 20.3946 11.7929 20.2071C11.6054 20.0196 11.5 19.7652 11.5 19.5V12.5C11.5 12.2348 11.6054 11.9804 11.7929 11.7929C11.9804 11.6054 12.2348 11.5 12.5 11.5H18L20.5 14V19.5C20.5 19.7652 20.3946 20.0196 20.2071 20.2071C20.0196 20.3946 19.7652 20.5 19.5 20.5Z" stroke="white" stroke-linecap="round" stroke-linejoin="round"/>
+<path id="Vector_2" d="M18.5 20.5V16.5H13.5V20.5" stroke="white" stroke-linecap="round" stroke-linejoin="round"/>
+<path id="Vector_3" d="M13.5 11.5V14H17.5" stroke="white" stroke-linecap="round" stroke-linejoin="round"/>
+</g>
+</g>
+</svg>

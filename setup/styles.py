@@ -1,0 +1,12 @@
+"""Palette partagée pour toutes les pages du setup — sobre, style Paramètres."""
+
+WHITE = "#FFFFFF"
+BG = "#FFFFFF"
+BG_SEC = "#F8FAFC"
+TEXT = "#0F172A"
+TEXT_SEC = "#64748B"
+TEXT_MUTED = "#94A3B8"
+GREEN = "#22C55E"
+GREEN_HOVER = "#16A34A"
+GREEN_DARK = "#166534"
+BORDER = "#E2E8F0"

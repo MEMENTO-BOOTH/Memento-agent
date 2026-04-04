@@ -1,0 +1,29 @@
+# Secrets
+.env
+
+# Build
+build/
+dist/
+installer_output/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# IDE
+.vscode/
+.idea/
+.claude/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+*.log.old
+
+# Temp
+*.tmp
+*.bak
