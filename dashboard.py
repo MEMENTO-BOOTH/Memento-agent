@@ -906,7 +906,8 @@ class ErrorTableWidget(QWidget):
 
         # Lignes de données
         for row_idx, row_data in enumerate(self.rows):
-            err_type = row_data[0]
+            from alertes.data import TYPE_LABELS
+            err_type = TYPE_LABELS.get(row_data[0], row_data[0])
             time_str = row_data[2]
             source = row_data[3]
             assigned = row_data[4]

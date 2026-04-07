@@ -10,6 +10,13 @@ from PyQt5.QtCore import QByteArray
 from dashboard import T, DARK_THEME, LIME_GREEN, TEXT_BLACK, TEXT_WHITE, ASSETS_DIR, _utc_to_local
 from .data import TYPE_TO_ICON, TYPE_LABELS, resolve_alerte, assign_alerte, delete_alerte
 
+# Types visuellement "warning" (orange) — même si Supabase dit "critique"
+_TYPES_WARNING_VISUEL = {"surchauffe", "papier_bas", "disque_bas", "coupe_incoherente", "crash_relance"}
+
+def _gravite_visuelle(alerte):
+    """Retourne la gravité visuelle basée sur le type d'alerte."""
+    return "warning" if alerte.get("type", "") in _TYPES_WARNING_VISUEL else "critique"
+
 
 def _load_icon(filename, size=32, resolved=False):
     """Charge un SVG. Si resolved, cercle vert + icône noire."""
@@ -163,7 +170,7 @@ class AlerteTable(QWidget):
 
         vl.addLayout(_row("Statut", statut.capitalize()))
         vl.addSpacing(8)
-        vl.addLayout(_row("Gravité", alerte.get("gravite", "—").capitalize()))
+        vl.addLayout(_row("Gravité", _gravite_visuelle(alerte).capitalize()))
         vl.addSpacing(8)
         vl.addLayout(_row("Heure", _utc_to_local(alerte.get("timestamp", ""))))
         vl.addSpacing(8)
@@ -284,7 +291,7 @@ class AlerteTable(QWidget):
             body_font.setPixelSize(12)
             p.setFont(body_font)
             p.setPen(QColor(T()["text"]))
-            gravite = alerte.get("gravite", "—")
+            gravite = _gravite_visuelle(alerte)
             p.drawText(QRect(col_x[1], y, col_x[2] - col_x[1], self._row_h), Qt.AlignVCenter | Qt.AlignLeft, gravite.capitalize())
 
             # Heure — noir
