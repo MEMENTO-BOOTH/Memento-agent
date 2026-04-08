@@ -1,0 +1,55 @@
+name: Mise a jour Supabase apres release
+
+on:
+  release:
+    types: [published]
+
+jobs:
+  update-supabase:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Recuperer les infos de la release
+        id: release_info
+        run: |
+          VERSION="${{ github.event.release.tag_name }}"
+          VERSION="${VERSION#v}"
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+          cat << 'NOTES_EOF' > /tmp/release_notes.txt
+          ${{ github.event.release.body }}
+          NOTES_EOF
+
+          ASSETS_JSON='${{ toJSON(github.event.release.assets) }}'
+          EXE_URL=$(echo "$ASSETS_JSON" | jq -r '.[] | select(.name | endswith(".exe")) | .browser_download_url' | head -1)
+
+          if [ -z "$EXE_URL" ]; then
+            echo "Aucun fichier .exe trouve dans la release"
+            exit 1
+          fi
+
+          echo "exe_url=$EXE_URL" >> $GITHUB_OUTPUT
+
+      - name: Mettre a jour Supabase
+        run: |
+          VERSION="${{ steps.release_info.outputs.version }}"
+          EXE_URL="${{ steps.release_info.outputs.exe_url }}"
+          NOTES=$(cat /tmp/release_notes.txt)
+
+          HTTP_CODE=$(curl -s -o /tmp/response.json -w "%{http_code}" \
+            -X POST "${{ secrets.SUPABASE_URL }}/rest/v1/updates" \
+            -H "apikey: ${{ secrets.SUPABASE_KEY }}" \
+            -H "Authorization: Bearer ${{ secrets.SUPABASE_KEY }}" \
+            -H "Content-Type: application/json" \
+            -H "Prefer: return=representation" \
+            -d "$(jq -n \
+              --arg version "$VERSION" \
+              --arg fichier_url "$EXE_URL" \
+              --arg notes "$NOTES" \
+              '{version: \$version, fichier_url: \$fichier_url, notes: \$notes, publiee_at: (now | todate)}')")
+
+          if [ "$HTTP_CODE" -ge 200 ] && [ "$HTTP_CODE" -lt 300 ]; then
+            echo "Table updates mise a jour avec succes"
+          else
+            echo "Erreur Supabase (code $HTTP_CODE)"
+            exit 1
+          fi
