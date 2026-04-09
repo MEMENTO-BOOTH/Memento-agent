@@ -196,7 +196,9 @@ def _resoudre_alertes(borne_id, types):
 
             if _on_alerte_changed:
                 _on_alerte_changed()
-            if _on_alerte_critique and not _alertes_ouvertes:
+            # Cacher la page rupture s'il ne reste plus d'alertes visuellement critiques
+            alertes_critiques_restantes = _alertes_ouvertes - _TYPES_WARNING_VISUEL
+            if _on_alerte_critique and not alertes_critiques_restantes:
                 _on_alerte_critique(False)
 
             # 2. ENSUITE envoyer à Supabase
