@@ -15,67 +15,66 @@ jobs:
           VERSION="${VERSION#v}"
           echo "version=$VERSION" >> $GITHUB_OUTPUT
 
-          cat << 'NOTES_EOF' > /tmp/release_notes.txt
-          ${{ github.event.release.body }}
-          NOTES_EOF
-
           ASSETS_JSON='${{ toJSON(github.event.release.assets) }}'
-          EXE_URL=$(echo "$ASSETS_JSON" | jq -r '.[] | select(.name | endswith(".exe")) | .browser_download_url' | head -1)
+          # Utiliser l'URL API de l'asset (pas browser_download_url qui 404 sur repo prive)
+          ASSET_API_URL=$(echo "$ASSETS_JSON" | jq -r '.[] | select(.name | endswith(".exe")) | .url' | head -1)
           EXE_NAME=$(echo "$ASSETS_JSON" | jq -r '.[] | select(.name | endswith(".exe")) | .name' | head -1)
 
-          if [ -z "$EXE_URL" ]; then
+          if [ -z "$ASSET_API_URL" ] || [ "$ASSET_API_URL" = "null" ]; then
             echo "Aucun fichier .exe trouve dans la release"
             exit 1
           fi
 
-          echo "exe_url=$EXE_URL" >> $GITHUB_OUTPUT
+          echo "asset_api_url=$ASSET_API_URL" >> $GITHUB_OUTPUT
           echo "exe_name=$EXE_NAME" >> $GITHUB_OUTPUT
+          echo "Fichier: $EXE_NAME"
+          echo "API URL: $ASSET_API_URL"
 
-      - name: Telecharger le exe depuis GitHub
+      - name: Telecharger le exe depuis GitHub API
         run: |
           curl -L \
             -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
             -H "Accept: application/octet-stream" \
             -o /tmp/${{ steps.release_info.outputs.exe_name }} \
-            "${{ steps.release_info.outputs.exe_url }}"
+            "${{ steps.release_info.outputs.asset_api_url }}"
 
-          ls -la /tmp/${{ steps.release_info.outputs.exe_name }}
+          SIZE=$(stat -c%s "/tmp/${{ steps.release_info.outputs.exe_name }}")
+          echo "Telecharge: $SIZE octets"
+
+          if [ "$SIZE" -lt 1000 ]; then
+            echo "ERREUR: fichier trop petit ($SIZE octets), le telechargement a echoue"
+            cat /tmp/${{ steps.release_info.outputs.exe_name }}
+            exit 1
+          fi
 
       - name: Uploader dans Supabase Storage
-        id: upload
         run: |
           EXE_NAME="${{ steps.release_info.outputs.exe_name }}"
-          SUPABASE_URL="${{ secrets.SUPABASE_URL }}"
-          SUPABASE_KEY="${{ secrets.SUPABASE_KEY }}"
 
-          # Upload dans le bucket "updates"
           HTTP_CODE=$(curl -s -o /tmp/upload_response.txt -w "%{http_code}" \
-            -X POST "$SUPABASE_URL/storage/v1/object/updates/$EXE_NAME" \
-            -H "apikey: $SUPABASE_KEY" \
-            -H "Authorization: Bearer $SUPABASE_KEY" \
+            -X POST "${{ secrets.SUPABASE_URL }}/storage/v1/object/updates/$EXE_NAME" \
+            -H "apikey: ${{ secrets.SUPABASE_KEY }}" \
+            -H "Authorization: Bearer ${{ secrets.SUPABASE_KEY }}" \
             -H "Content-Type: application/octet-stream" \
             -H "x-upsert: true" \
             --data-binary @/tmp/$EXE_NAME)
 
           echo "Upload HTTP: $HTTP_CODE"
-          cat /tmp/upload_response.txt
 
-          if [ "$HTTP_CODE" -ge 200 ] && [ "$HTTP_CODE" -lt 300 ]; then
-            echo "Upload OK"
-          else
-            echo "Erreur upload"
+          if [ "$HTTP_CODE" -lt 200 ] || [ "$HTTP_CODE" -ge 300 ]; then
+            echo "Erreur upload Supabase Storage"
+            cat /tmp/upload_response.txt
             exit 1
           fi
 
-          # URL publique du fichier
-          STORAGE_URL="$SUPABASE_URL/storage/v1/object/public/updates/$EXE_NAME"
-          echo "storage_url=$STORAGE_URL" >> $GITHUB_OUTPUT
+          echo "Upload OK dans Supabase Storage"
 
       - name: Mettre a jour la table updates
         run: |
           VERSION="${{ steps.release_info.outputs.version }}"
-          STORAGE_URL="${{ steps.upload.outputs.storage_url }}"
-          NOTES=$(cat /tmp/release_notes.txt)
+          EXE_NAME="${{ steps.release_info.outputs.exe_name }}"
+          STORAGE_URL="${{ secrets.SUPABASE_URL }}/storage/v1/object/public/updates/$EXE_NAME"
+          NOTES=$(echo '${{ github.event.release.body }}' | head -c 500)
 
           JSON_BODY=$(jq -n \
             --arg version "$VERSION" \
@@ -88,14 +87,13 @@ jobs:
             -H "apikey: ${{ secrets.SUPABASE_KEY }}" \
             -H "Authorization: Bearer ${{ secrets.SUPABASE_KEY }}" \
             -H "Content-Type: application/json" \
-            -H "Prefer: return=representation" \
+            -H "Prefer: resolution=merge-duplicates,return=representation" \
             -d "$JSON_BODY")
 
           if [ "$HTTP_CODE" -ge 200 ] && [ "$HTTP_CODE" -lt 300 ]; then
-            echo "Table updates mise a jour avec succes"
-            cat /tmp/response.json
+            echo "Table updates OK: v$VERSION -> $STORAGE_URL"
           else
-            echo "Erreur Supabase (code $HTTP_CODE)"
+            echo "Erreur Supabase table updates (code $HTTP_CODE)"
             cat /tmp/response.json
             exit 1
           fi
@@ -105,7 +103,6 @@ jobs:
           SUPABASE_URL="${{ secrets.SUPABASE_URL }}"
           SUPABASE_KEY="${{ secrets.SUPABASE_KEY }}"
 
-          # Lister tous les fichiers dans le bucket updates
           FILES=$(curl -s \
             -X POST "$SUPABASE_URL/storage/v1/object/list/updates" \
             -H "apikey: $SUPABASE_KEY" \
@@ -113,21 +110,20 @@ jobs:
             -H "Content-Type: application/json" \
             -d '{"prefix":"","limit":100,"offset":0,"sortBy":{"column":"created_at","order":"desc"}}')
 
-          # Compter les fichiers .exe
           TOTAL=$(echo "$FILES" | jq '[.[] | select(.name | endswith(".exe"))] | length')
-          echo "Total fichiers exe: $TOTAL"
+          echo "Total fichiers exe dans le bucket: $TOTAL"
 
           if [ "$TOTAL" -gt 3 ]; then
-            # Garder les 3 plus recents, supprimer le reste
             TO_DELETE=$(echo "$FILES" | jq -r '[.[] | select(.name | endswith(".exe"))] | sort_by(.created_at) | reverse | .[3:] | .[].name')
 
             for FILE in $TO_DELETE; do
-              echo "Suppression: $FILE"
+              echo "Suppression ancienne version: $FILE"
               curl -s -o /dev/null \
                 -X DELETE "$SUPABASE_URL/storage/v1/object/updates/$FILE" \
                 -H "apikey: $SUPABASE_KEY" \
                 -H "Authorization: Bearer $SUPABASE_KEY"
             done
+            echo "Nettoyage termine"
           else
-            echo "Moins de 3 fichiers, rien a supprimer"
+            echo "Moins de 4 fichiers, rien a supprimer"
           fi
