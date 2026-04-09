@@ -251,6 +251,7 @@ class EmentoWatcher:
 
     def __init__(self, borne_id):
         self._borne_id = borne_id
+        self._start_time = datetime.now()
         self._etat = {
             "session_id": None,
             "code": "",
@@ -275,9 +276,12 @@ class EmentoWatcher:
 
         try:
             taille = os.path.getsize(DSLRBOOTH_LOG)
-            # Rotation détectée
+            # Rotation détectée — on relit mais on ignore les lignes anciennes
             if taille < self._position:
                 self._position = 0
+                self._rotation = True
+            else:
+                self._rotation = False
 
             with open(DSLRBOOTH_LOG, "r", encoding="utf-8", errors="ignore") as f:
                 f.seek(self._position)
@@ -288,6 +292,16 @@ class EmentoWatcher:
             print(f"[EMMENTO] Erreur lecture log: {e}")
 
     def _traiter_ligne(self, ligne):
+        # Ignorer les lignes antérieures au démarrage (protection rotation log)
+        try:
+            ts_str = ligne[:23].strip()  # "2026-04-07 15:16:10.188"
+            if ts_str and len(ts_str) >= 19:
+                ts_ligne = datetime.strptime(ts_str[:19], "%Y-%m-%d %H:%M:%S")
+                if ts_ligne < self._start_time:
+                    return
+        except (ValueError, IndexError):
+            pass
+
         # Nouvelle session
         m = RE_SESSION.search(ligne)
         if m:
