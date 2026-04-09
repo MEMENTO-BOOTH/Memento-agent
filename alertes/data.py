@@ -91,7 +91,7 @@ TYPE_LABELS = {
     "crash_dslrbooth":    "Crash DSLRBOOTH",
     "crash_cashinterface":"Crash Cash Interface",
     "imprimante_deconnectee": "Imprimante déconnectée",
-    "coupe_incoherente": "Coupe 2 pouces",
+    "coupe_incoherente": "Coupe 2 pouces désactivée",
     "crash_relance":      "Crash relancé",
     "borne_hors_ligne":   "Borne hors ligne",
 }

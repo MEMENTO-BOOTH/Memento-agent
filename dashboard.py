@@ -643,6 +643,23 @@ class _SupabaseWorker(QThread):
         self.done.emit(result)
 
 
+class _AlertesFastWorker(QThread):
+    """Worker léger — ne charge que les alertes (pas borne, CA, logo)."""
+    done = pyqtSignal(object)
+
+    def __init__(self, borne_id, parent=None):
+        super().__init__(parent)
+        self._borne_id = borne_id
+
+    def run(self):
+        import supabase_client as supa
+        try:
+            alertes = supa.get_alertes(self._borne_id, limit=16)
+            self.done.emit({"alertes": alertes})
+        except Exception:
+            self.done.emit({})
+
+
 class ErrorTableWidget(QWidget):
     """Tableau d'erreurs entièrement peint pour un rendu propre."""
     def __init__(self, parent=None):
@@ -906,7 +923,8 @@ class ErrorTableWidget(QWidget):
 
         # Lignes de données
         for row_idx, row_data in enumerate(self.rows):
-            err_type = row_data[0]
+            from alertes.data import TYPE_LABELS
+            err_type = TYPE_LABELS.get(row_data[0], row_data[0])
             time_str = row_data[2]
             source = row_data[3]
             assigned = row_data[4]
@@ -1045,11 +1063,13 @@ class DashboardWindow(QMainWindow):
             hide_rupture()
 
     def _on_alerte_changed(self):
-        """Une alerte a été créée ou résolue — rafraîchir immédiatement."""
-        try:
-            self._fetch_supabase_data()
-        except Exception:
-            pass
+        """Une alerte a été créée ou résolue — rafraîchir rapidement (alertes uniquement)."""
+        # Worker léger : ne charge que les alertes, pas borne/CA/logo
+        if hasattr(self, '_borne_id_cache') and self._borne_id_cache:
+            if not (hasattr(self, '_fast_worker') and self._fast_worker and self._fast_worker.isRunning()):
+                self._fast_worker = _AlertesFastWorker(self._borne_id_cache)
+                self._fast_worker.done.connect(self._on_data_loaded)
+                self._fast_worker.start()
         # Rafraîchir la page alertes si elle existe
         if hasattr(self, '_page_alertes') and hasattr(self._page_alertes, '_auto_refresh'):
             try:
@@ -1177,6 +1197,7 @@ class DashboardWindow(QMainWindow):
         # Profile card + collapsed profile
         borne = data.get("borne")
         if borne:
+            self._borne_id_cache = borne.get("id")
             nom = borne.get("nom_lieu") or "—"
             code = borne.get("code") or "—"
             for card in self.findChildren(ProfileCard):

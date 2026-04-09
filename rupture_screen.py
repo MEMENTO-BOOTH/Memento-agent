@@ -138,12 +138,12 @@ class RuptureScreen(QWidget):
     def _show_pin_dialog(self):
         dlg = QDialog(self)
         dlg.setWindowTitle("Déverrouiller")
-        dlg.setFixedSize(340, 180)
+        dlg.setFixedSize(340, 420)
         dlg.setStyleSheet("background: #0F172A;")
 
         vl = QVBoxLayout(dlg)
         vl.setContentsMargins(24, 20, 24, 20)
-        vl.setSpacing(14)
+        vl.setSpacing(10)
 
         title = QLabel("Code PIN")
         title.setStyleSheet(
@@ -154,39 +154,73 @@ class RuptureScreen(QWidget):
 
         inp = QLineEdit()
         inp.setEchoMode(QLineEdit.Password)
-        inp.setPlaceholderText("Entrez le code PIN")
-        inp.setFixedHeight(40)
+        inp.setReadOnly(True)
+        inp.setPlaceholderText("____")
+        inp.setFixedHeight(44)
+        inp.setAlignment(Qt.AlignCenter)
         inp.setStyleSheet(
             "border: 1.7px solid #334155; border-radius: 8px; "
-            "padding: 6px 14px; font-family: 'Satoshi'; font-size: 13px; "
-            "color: white; background: transparent;"
+            "padding: 6px 14px; font-family: 'Satoshi'; font-size: 22px; "
+            "letter-spacing: 12px; color: white; background: transparent;"
         )
         vl.addWidget(inp)
 
         err = QLabel("")
+        err.setAlignment(Qt.AlignCenter)
         err.setStyleSheet("color: #EF4444; font-family: 'Satoshi'; font-size: 12px; background: transparent;")
         vl.addWidget(err)
 
-        btn = QPushButton("Déverrouiller")
-        btn.setCursor(Qt.PointingHandCursor)
-        btn.setFixedHeight(40)
-        btn.setStyleSheet(
-            "QPushButton { background: #B6FF56; color: #0F172A; border-radius: 8px; "
-            "font-family: 'Satoshi'; font-size: 13px; font-weight: 600; border: none; } "
-            "QPushButton:hover { background: #A8EE4A; }"
+        # Pavé numérique tactile
+        from PyQt5.QtWidgets import QGridLayout
+        grid = QGridLayout()
+        grid.setSpacing(8)
+
+        btn_style = (
+            "QPushButton { background: #1E293B; color: white; border: 1.7px solid #334155; "
+            "border-radius: 10px; font-family: 'Satoshi'; font-size: 20px; font-weight: 600; } "
+            "QPushButton:pressed { background: #334155; }"
         )
+
+        def _add_digit(d):
+            if len(inp.text()) < 4:
+                inp.setText(inp.text() + d)
+
+        for i, num in enumerate(["1","2","3","4","5","6","7","8","9"]):
+            b = QPushButton(num)
+            b.setFixedSize(80, 56)
+            b.setCursor(Qt.PointingHandCursor)
+            b.setStyleSheet(btn_style)
+            b.clicked.connect(lambda _, d=num: _add_digit(d))
+            grid.addWidget(b, i // 3, i % 3)
+
+        # Ligne du bas : Effacer, 0, OK
+        btn_clear = QPushButton("C")
+        btn_clear.setFixedSize(80, 56)
+        btn_clear.setCursor(Qt.PointingHandCursor)
+        btn_clear.setStyleSheet(
+            "QPushButton { background: #7F1D1D; color: white; border: none; "
+            "border-radius: 10px; font-family: 'Satoshi'; font-size: 18px; font-weight: 600; } "
+            "QPushButton:pressed { background: #991B1B; }"
+        )
+        btn_clear.clicked.connect(lambda: inp.clear())
+        grid.addWidget(btn_clear, 3, 0)
+
+        btn_zero = QPushButton("0")
+        btn_zero.setFixedSize(80, 56)
+        btn_zero.setCursor(Qt.PointingHandCursor)
+        btn_zero.setStyleSheet(btn_style)
+        btn_zero.clicked.connect(lambda: _add_digit("0"))
+        grid.addWidget(btn_zero, 3, 1)
 
         def _validate():
             import supabase_client as supa
             from paths import reg_get
             pin = inp.text()
-            # Vérifier dans Supabase
             user = supa.verifier_pin(pin)
             if user:
                 dlg.accept()
                 self.hide()
                 return
-            # Fallback local
             if pin == (reg_get("pin") or "0000"):
                 dlg.accept()
                 self.hide()
@@ -194,9 +228,18 @@ class RuptureScreen(QWidget):
             err.setText("Code PIN incorrect")
             inp.clear()
 
-        btn.clicked.connect(_validate)
-        inp.returnPressed.connect(_validate)
-        vl.addWidget(btn)
+        btn_ok = QPushButton("OK")
+        btn_ok.setFixedSize(80, 56)
+        btn_ok.setCursor(Qt.PointingHandCursor)
+        btn_ok.setStyleSheet(
+            "QPushButton { background: #B6FF56; color: #0F172A; border: none; "
+            "border-radius: 10px; font-family: 'Satoshi'; font-size: 18px; font-weight: 600; } "
+            "QPushButton:pressed { background: #A8EE4A; }"
+        )
+        btn_ok.clicked.connect(_validate)
+        grid.addWidget(btn_ok, 3, 2)
+
+        vl.addLayout(grid)
         dlg.exec_()
 
     def show_fullscreen(self):

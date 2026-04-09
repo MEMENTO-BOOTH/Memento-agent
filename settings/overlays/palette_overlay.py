@@ -23,7 +23,7 @@ ALERTE_TYPES = [
     {"type": "crash_dslrbooth",    "label": "Crash DSLRBOOTH",      "icon": "alert_crash_dslrbooth.svg",   "gravite": "critique", "code": "processus"},
     {"type": "crash_cashinterface","label": "Crash Cash Interface", "icon": "alert_crash_dslrbooth.svg",   "gravite": "critique", "code": "processus"},
     {"type": "imprimante_deconnectee","label": "Imprimante déconnectée", "icon": "alert_erreur_mecanique.svg", "gravite": "critique", "code": "USB"},
-    {"type": "coupe_incoherente",    "label": "Coupe 2 pouces","icon": "icon_coupe_incoherente.svg","gravite": "critique", "code": "DEVMODE"},
+    {"type": "coupe_incoherente",    "label": "Coupe 2 pouces désactivée","icon": "icon_coupe_incoherente.svg","gravite": "warning", "code": "DEVMODE"},
     {"type": "disque_plein",       "label": "Disque plein",         "icon": "alert_disque_plein_new.svg",  "gravite": "critique", "code": "disque"},
     # ── Warnings (oranges) — affichés sur le dashboard, pas de SMS ──
     {"type": "surchauffe",         "label": "Surchauffe",           "icon": "icon_surchauffe.svg",         "gravite": "warning",  "code": "0x10020/40"},

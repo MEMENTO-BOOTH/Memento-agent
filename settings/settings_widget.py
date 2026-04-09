@@ -341,6 +341,15 @@ class SettingsWidget(QWidget):
                 supa.supabase_patch_heartbeat, lambda ok: None,
                 self._borne_id, {"mode_coupe": mode},
             )
+            # Résoudre / créer l'alerte coupe directement
+            from monitoring.alertes.alertes_monitor import _resoudre_alertes, _creer_alerte, _alerte_deja_ouverte
+            if toggle.is_on():
+                _resoudre_alertes(self._borne_id, ["coupe_incoherente"])
+            else:
+                if not _alerte_deja_ouverte(self._borne_id, "coupe_incoherente"):
+                    nom_imp = self._ref_imp["lbl_nom"].text() or "imprimante"
+                    _creer_alerte(self._borne_id, "coupe_incoherente", "imprimante",
+                                  f"Coupe 2 pouces désactivée sur {nom_imp}.", "warning")
 
     def _on_toggle_maintenance(self, event):
         toggle = self._ref_sys["toggle_maint"]

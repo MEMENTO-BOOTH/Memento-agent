@@ -256,7 +256,7 @@ class MonitoringEngine(QThread):
 
         print(f"[MAJ] Nouvelle version disponible: {latest} (actuelle: {VERSION})")
 
-        # Télécharger
+        # Télécharger (URL Supabase Storage — publique, pas besoin de token)
         try:
             r = requests.get(url, timeout=120, stream=True)
             if r.status_code != 200:

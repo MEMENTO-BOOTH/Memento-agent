@@ -113,11 +113,19 @@ def _alerte_deja_ouverte(borne_id, type_alerte):
     return type_alerte in _alertes_ouvertes
 
 
+# Types visuellement "warning" : affichés en orange, PAS de page rupture
+# Mais envoyés comme "critique" à Supabase pour déclencher le SMS
+_TYPES_WARNING_VISUEL = {"surchauffe", "papier_bas", "disque_bas", "coupe_incoherente", "crash_relance", "borne_hors_ligne"}
+
+
 def _creer_alerte(borne_id, type_alerte, source, message, gravite="critique"):
     try:
+        # Gravité visuelle (orange ou rouge sur l'UI)
+        gravite_visuelle = "warning" if type_alerte in _TYPES_WARNING_VISUEL else "critique"
+
         # 1. D'ABORD mettre à jour l'app (cache + UI + écran rupture)
         _alertes_ouvertes.add(type_alerte)
-        print(f"  [ALERTE] {type_alerte} créée — {gravite}")
+        print(f"  [ALERTE] {type_alerte} créée — visuel={gravite_visuelle}, supabase=critique")
 
         import activity_logger as alog
         icon_map = {
@@ -138,21 +146,22 @@ def _creer_alerte(borne_id, type_alerte, source, message, gravite="critique"):
             "disque_plein": "alert_disque_plein_new.svg",
             "coupe_incoherente": "icon_coupe_incoherente.svg",
         }
-        alog.log_alerte_creee(type_alerte, gravite, source, message, borne_id)
+        alog.log_alerte_creee(type_alerte, gravite_visuelle, source, message, borne_id)
         alog.ui_alerte(f"{message}", icon_map.get(type_alerte, "icon_borne_hors_ligne.svg"), resolved=False)
 
         if _on_alerte_changed:
             _on_alerte_changed()
-        if gravite == "critique" and _on_alerte_critique:
+        # Page rupture uniquement pour les alertes visuellement critiques (rouges)
+        if gravite_visuelle == "critique" and _on_alerte_critique:
             _on_alerte_critique(True)
 
-        # 2. ENSUITE envoyer à Supabase
+        # 2. ENSUITE envoyer à Supabase — TOUJOURS "critique" pour déclencher le SMS
         payload = {
             "borne_id": borne_id,
             "type": type_alerte,
             "source": source,
             "message": message,
-            "gravite": gravite,
+            "gravite": "critique",
             "statut": "ouverte",
             "timestamp": datetime.now().astimezone().isoformat(),
         }
@@ -354,6 +363,6 @@ def verifier_alertes(borne_id, nom_lieu, donnees):
         if not _alerte_deja_ouverte(borne_id, "coupe_incoherente"):
             nom_imp = donnees.get("nom_imprimante") or "imprimante"
             _creer_alerte(borne_id, "coupe_incoherente", "imprimante",
-                          f"Coupe 2 pouces désactivée sur {nom_imp} ({bar}).", "critique")
+                          f"Coupe 2 pouces désactivée sur {nom_imp} ({bar}).", "warning")
     elif mode_coupe == "Coupe activée":
         _resoudre_alertes(borne_id, ["coupe_incoherente"])
