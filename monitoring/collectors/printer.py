@@ -124,17 +124,9 @@ def lire_imprimante():
         except Exception:
             pass
 
-        # Mode coupe
-        coupe = False
-        try:
-            reg_path = rf"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Print\Printers\{printer_name}"
-            with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, reg_path, 0, winreg.KEY_READ) as k:
-                dm, _ = winreg.QueryValueEx(k, "Default DevMode")
-                if len(dm) > 282 and dm[282] == 120:
-                    coupe = True
-        except Exception:
-            pass
-        result["mode_coupe"] = "Coupe activée" if coupe else "Coupe désactivée"
+        # Mode coupe — lire le flag fichier (pas le registre HKLM qui ne reflète pas la clé utilisateur)
+        from monitoring.coupe_2pouces.coupe import est_coupe_active
+        result["mode_coupe"] = "Coupe activée" if est_coupe_active() else "Coupe désactivée"
 
         # Libérer
         try:
