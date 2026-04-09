@@ -35,7 +35,8 @@ def _trouver_google_drive():
 
 
 def _detecter_evenement():
-    """Lit l'événement actif depuis la config dslrBooth."""
+    """Lit l'événement actif depuis la config dslrBooth.
+    Si la DB est vide ou absente, utilise le dossier le plus récent dans C:\\dslrBooth\\."""
     event_id = None
     try:
         with open(DSLRBOOTH_CONFIG, "r", encoding="utf-8") as f:
@@ -44,21 +45,38 @@ def _detecter_evenement():
     except Exception:
         pass
 
-    if not event_id:
-        return None
+    # Méthode 1 : chercher dans la DB (versions récentes de dslrBooth)
+    if event_id:
+        try:
+            db_size = os.path.getsize(DSLRBOOTH_DB) if os.path.exists(DSLRBOOTH_DB) else 0
+            if db_size > 0:
+                conn = sqlite3.connect(DSLRBOOTH_DB)
+                cur = conn.cursor()
+                cur.execute("SELECT AlbumName FROM FileItems WHERE EventId=? LIMIT 1", (event_id,))
+                row = cur.fetchone()
+                conn.close()
+                if row and row[0]:
+                    dossier = os.path.join(DSLRBOOTH_BASE, row[0])
+                    if os.path.isdir(dossier):
+                        return row[0]
+        except Exception:
+            pass
 
+    # Méthode 2 : dossier le plus récemment modifié dans C:\dslrBooth\
+    EXCLUS = {"Settings", "Templates"}
     try:
-        conn = sqlite3.connect(DSLRBOOTH_DB)
-        cur = conn.cursor()
-        cur.execute("SELECT AlbumName FROM FileItems WHERE EventId=? LIMIT 1", (event_id,))
-        row = cur.fetchone()
-        conn.close()
-        if row and row[0]:
-            dossier = os.path.join(DSLRBOOTH_BASE, row[0])
-            if os.path.isdir(dossier):
-                return row[0]
+        dossiers = []
+        for nom in os.listdir(DSLRBOOTH_BASE):
+            chemin = os.path.join(DSLRBOOTH_BASE, nom)
+            if os.path.isdir(chemin) and nom not in EXCLUS:
+                mtime = os.path.getmtime(chemin)
+                dossiers.append((mtime, nom))
+        if dossiers:
+            dossiers.sort(reverse=True)
+            return dossiers[0][1]
     except Exception:
         pass
+
     return None
 
 
