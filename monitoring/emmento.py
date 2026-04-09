@@ -45,7 +45,11 @@ DEFAULT_CODE_CONFIG = {
 
 # Regex pour parser le log dslrBooth
 RE_SESSION = re.compile(r"SessionID changed from .+ to (\S+)")
-RE_PRINT = re.compile(r"File added to database for sessionNanoId: (\S+), file: (.+\\Prints\\.+)")
+# Deux formats possibles selon la version de dslrBooth :
+# Ancien: "File added to database for sessionNanoId: ABC123, file: C:\...\Prints\photo.jpg"
+# Nouveau: "Setting picturebox image: C:\...\Prints\photo.jpg"
+RE_PRINT_OLD = re.compile(r"File added to database for sessionNanoId: (\S+), file: (.+\\Prints\\.+)")
+RE_PRINT_NEW = re.compile(r"Setting picturebox image: (.+\\Prints\\.+)")
 
 # Headers Supabase pour ememento (UPSERT)
 HEADERS_UPSERT = {
@@ -302,10 +306,12 @@ class EmentoWatcher:
         except (ValueError, IndexError):
             pass
 
-        # Nouvelle session
+        # Nouvelle session (ignorer si même session_id)
         m = RE_SESSION.search(ligne)
         if m:
             nouveau_id = m.group(1)
+            if nouveau_id == self._etat.get("session_id"):
+                return  # Même session, ignorer le doublon
             code = _generer_code_unique(self._borne_id)
             self._etat = {
                 "session_id": nouveau_id,
@@ -322,12 +328,11 @@ class EmentoWatcher:
             _generer_image_code(code)
             return
 
-        # Print détecté
-        m = RE_PRINT.search(ligne)
+        # Print détecté — ancien format (avec session_id)
+        m = RE_PRINT_OLD.search(ligne)
         if m:
             session_id = m.group(1)
             chemin = m.group(2).strip()
-
             if self._etat.get("session_id") != session_id:
                 code = _generer_code_unique(self._borne_id)
                 self._etat = {
@@ -338,6 +343,16 @@ class EmentoWatcher:
                     "timestamp": datetime.now().isoformat(),
                 }
                 _generer_image_code(code)
+        else:
+            # Print détecté — nouveau format (sans session_id)
+            m = RE_PRINT_NEW.search(ligne)
+            if m:
+                chemin = m.group(1).strip()
+                session_id = self._etat.get("session_id")
+                if not session_id:
+                    return  # Pas de session en cours
+
+        if m:
 
             self._etat["photos"].append(chemin)
             self._etat["bar"] = _get_bar_from_path(chemin)
