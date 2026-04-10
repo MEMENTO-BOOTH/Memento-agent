@@ -57,7 +57,8 @@ def open_dashboard(app):
     from dashboard import DashboardWindow
     from auth import LockScreen
 
-    dashboard = DashboardWindow()
+    # Passer le monitoring déjà démarré au dashboard
+    dashboard = DashboardWindow(monitor=getattr(app, '_monitor', None))
     app._dashboard = dashboard
     app._lock = None
     _log("DashboardWindow created")
@@ -101,6 +102,28 @@ def _install_exception_hook():
     sys.excepthook = _hook
 
 
+def _start_monitoring_early(app):
+    """Démarre le monitoring AVANT l'écran PIN pour que les alertes, e-memento et drive fonctionnent immédiatement."""
+    try:
+        from monitoring import MonitoringEngine
+        app._monitor = MonitoringEngine()
+        app._monitor.alerte_critique.connect(lambda has: _on_early_critique(has))
+        app._monitor.start()
+        _log("monitoring started (before PIN)")
+    except Exception as e:
+        _log(f"monitoring early start failed: {e}")
+        app._monitor = None
+
+
+def _on_early_critique(has_critique):
+    """Gère les alertes critiques même avant le dashboard."""
+    from rupture_screen import show_rupture, hide_rupture
+    if has_critique:
+        show_rupture()
+    else:
+        hide_rupture()
+
+
 def main():
     _log("main() enter")
     _install_exception_hook()
@@ -113,6 +136,9 @@ def main():
     QFontDatabase.addApplicationFont(os.path.join(ASSETS_DIR, "Satoshi-Medium.ttf"))
     QFontDatabase.addApplicationFont(os.path.join(ASSETS_DIR, "Satoshi-Bold.ttf"))
     _log("fonts loaded")
+
+    # Démarrer le monitoring AVANT tout (PIN, setup, dashboard)
+    _start_monitoring_early(app)
 
     first = is_first_launch()
     _log(f"is_first_launch = {first}")

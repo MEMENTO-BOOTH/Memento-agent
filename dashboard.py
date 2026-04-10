@@ -1001,8 +1001,9 @@ class ErrorTableWidget(QWidget):
 # ════════════════════════════════════════════════════
 
 class DashboardWindow(QMainWindow):
-    def __init__(self):
+    def __init__(self, monitor=None):
         super().__init__()
+        self._existing_monitor = monitor
         self.setWindowTitle("Memento Agent — Dashboard")
         # Adapter à la taille de l'écran
         screen = QApplication.primaryScreen().availableGeometry()
@@ -1046,13 +1047,20 @@ class DashboardWindow(QMainWindow):
         self._refresh_timer.start(300_000)  # 5 minutes
 
     def _start_monitoring(self):
-        """Démarre le moteur de monitoring en arrière-plan."""
-        from monitoring import MonitoringEngine
-        self._monitor = MonitoringEngine()
-        self._monitor.data_updated.connect(self._on_monitoring_data)
-        self._monitor.alerte_changed.connect(self._on_alerte_changed)
-        self._monitor.alerte_critique.connect(self._on_alerte_critique)
-        self._monitor.start()
+        """Connecte le moteur de monitoring (déjà démarré dans main.py)."""
+        if self._existing_monitor and self._existing_monitor.isRunning():
+            self._monitor = self._existing_monitor
+            self._monitor.data_updated.connect(self._on_monitoring_data)
+            self._monitor.alerte_changed.connect(self._on_alerte_changed)
+            self._monitor.alerte_critique.connect(self._on_alerte_critique)
+        else:
+            # Fallback : démarrer un nouveau monitoring si aucun n'existe
+            from monitoring import MonitoringEngine
+            self._monitor = MonitoringEngine()
+            self._monitor.data_updated.connect(self._on_monitoring_data)
+            self._monitor.alerte_changed.connect(self._on_alerte_changed)
+            self._monitor.alerte_critique.connect(self._on_alerte_critique)
+            self._monitor.start()
 
     def _on_alerte_critique(self, has_critique):
         """Alerte critique → afficher/cacher l'écran de rupture."""
