@@ -98,7 +98,8 @@ class MonitoringEngine(QThread):
         compteur = 0
         emmento_tick = 0
         update_check_interval = 360
-        tx_check_interval = 5  # vérifier transactions toutes les 5 cycles (5 min)
+        tx_check_interval = 1  # vérifier transactions à chaque cycle (60s)
+        delai_demarrage = 3  # ignorer alertes crash pendant 3 cycles (3 min)
         self._last_tx_count = 0
         self._check_initial_tx()
 
@@ -117,6 +118,10 @@ class MonitoringEngine(QThread):
 
                 # 3. Vérifier les alertes (SAUF en mode maintenance)
                 if not self._maintenance:
+                    # Pendant les 3 premières minutes, ignorer les crash dslrBooth/CashInterface
+                    if compteur <= delai_demarrage:
+                        donnees["dslrbooth_running"] = True
+                        donnees["cash_interface_running"] = True
                     verifier_alertes(self._borne_id, self._nom_lieu, donnees)
                 else:
                     print(f"[MONITORING] #{compteur} ⏸ Maintenance — alertes suspendues")
