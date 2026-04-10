@@ -326,6 +326,16 @@ class EmentoWatcher:
             alog.log_session(nouveau_id, code, "")
             alog.ui_log(f"Nouvelle session — code {code}")
             _generer_image_code(code)
+            # Envoyer immédiatement dans Supabase (sans photos, sera mis à jour au Print)
+            _envoyer_supabase(
+                session_id=nouveau_id,
+                bar="inconnu",
+                timestamp=self._etat["timestamp"],
+                photos=[],
+                code=code,
+                originals=[],
+                borne_id=self._borne_id,
+            )
             return
 
         # Print détecté — ancien format (avec session_id)
@@ -343,6 +353,16 @@ class EmentoWatcher:
                     "timestamp": datetime.now().isoformat(),
                 }
                 _generer_image_code(code)
+                # Envoyer immédiatement dans Supabase
+                _envoyer_supabase(
+                    session_id=session_id,
+                    bar="inconnu",
+                    timestamp=self._etat["timestamp"],
+                    photos=[],
+                    code=code,
+                    originals=[],
+                    borne_id=self._borne_id,
+                )
         else:
             # Print détecté — nouveau format (sans session_id)
             m = RE_PRINT_NEW.search(ligne)
