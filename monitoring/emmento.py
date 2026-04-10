@@ -355,39 +355,39 @@ class EmentoWatcher:
             return
 
         self._etat["photos"].append(chemin)
-            self._etat["bar"] = _get_bar_from_path(chemin)
-            self._etat["originals"] = _trouver_originals(
-                self._etat["bar"], time.time()
-            )
+        self._etat["bar"] = _get_bar_from_path(chemin)
+        self._etat["originals"] = _trouver_originals(
+            self._etat["bar"], time.time()
+        )
 
-            # Logger chaque fichier
-            import activity_logger as alog
-            fname = os.path.basename(chemin)
+        # Logger chaque fichier
+        import activity_logger as alog
+        fname = os.path.basename(chemin)
+        try:
+            fsize = os.path.getsize(chemin)
+        except Exception:
+            fsize = 0
+        alog.log_print(fname, fsize, self._etat["session_id"], self._etat["bar"])
+        alog.ui_log(f"Print: {fname}")
+
+        for orig in self._etat["originals"]:
+            ofname = os.path.basename(orig)
             try:
-                fsize = os.path.getsize(chemin)
+                osize = os.path.getsize(orig)
             except Exception:
-                fsize = 0
-            alog.log_print(fname, fsize, session_id, self._etat["bar"])
-            alog.ui_log(f"Print: {fname}")
+                osize = 0
+            alog.log_original(ofname, osize, orig)
+            alog.ui_log(f"Original: {ofname}")
 
-            for orig in self._etat["originals"]:
-                ofname = os.path.basename(orig)
-                try:
-                    osize = os.path.getsize(orig)
-                except Exception:
-                    osize = 0
-                alog.log_original(ofname, osize, orig)
-                alog.ui_log(f"Original: {ofname}")
-
-            _envoyer_supabase(
-                session_id=session_id,
-                bar=self._etat["bar"],
-                timestamp=self._etat["timestamp"],
-                photos=self._etat["photos"],
-                code=self._etat["code"],
-                originals=self._etat["originals"],
-                borne_id=self._borne_id,
-            )
+        _envoyer_supabase(
+            session_id=self._etat["session_id"],
+            bar=self._etat["bar"],
+            timestamp=self._etat["timestamp"],
+            photos=self._etat["photos"],
+            code=self._etat["code"],
+            originals=self._etat["originals"],
+            borne_id=self._borne_id,
+        )
 
     def _confirmer_impression(self):
         """Marque la dernière transaction non-confirmée comme imprimée dans Supabase."""
