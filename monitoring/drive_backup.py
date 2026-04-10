@@ -62,15 +62,25 @@ def _detecter_evenement():
         except Exception:
             pass
 
-    # Méthode 2 : dossier le plus récemment modifié dans C:\dslrBooth\
+    # Méthode 2 : dossier avec les fichiers Prints les plus récents dans C:\dslrBooth\
     EXCLUS = {"Settings", "Templates"}
     try:
         dossiers = []
         for nom in os.listdir(DSLRBOOTH_BASE):
             chemin = os.path.join(DSLRBOOTH_BASE, nom)
-            if os.path.isdir(chemin) and nom not in EXCLUS:
-                mtime = os.path.getmtime(chemin)
-                dossiers.append((mtime, nom))
+            if not os.path.isdir(chemin) or nom in EXCLUS:
+                continue
+            # Chercher le fichier le plus récent dans Prints
+            prints_dir = os.path.join(chemin, "Prints")
+            if os.path.isdir(prints_dir):
+                try:
+                    fichiers = [os.path.join(prints_dir, f) for f in os.listdir(prints_dir)
+                                if f.lower().endswith((".jpg", ".jpeg", ".png"))]
+                    if fichiers:
+                        dernier = max(os.path.getmtime(f) for f in fichiers)
+                        dossiers.append((dernier, nom))
+                except Exception:
+                    pass
         if dossiers:
             dossiers.sort(reverse=True)
             return dossiers[0][1]
