@@ -374,29 +374,47 @@ class ConfigPage(QWidget):
         reg_set("pin", pin)
         reg_set("setup_done", 1)
 
-        if self._borne_id:
-            self._run(supa.patch_borne, lambda ok: None, self._borne_id, {"setup_done": True})
+        # Collecter toutes les données à envoyer
+        nom_lieu = self._inp_nom_lieu.text().strip()
+        rows = []
+        for i, (inp_o, inp_f) in enumerate(self._horaires):
+            o, fv = inp_o.text().strip(), inp_f.text().strip()
+            rows.append({"jour": i, "ouverture": o or "00:00", "fermeture": fv or "00:00", "ferme": not o or not fv})
+        contacts = []
+        for c in self._contacts:
+            tel = c["tel"].text().strip()
+            email = c["email"].text().strip()
+            if tel or email:
+                contacts.append({"email": email, "telephone": tel})
 
-        if self._borne_id:
-            nom_lieu = self._inp_nom_lieu.text().strip()
+        borne_id = self._borne_id
+        on_finish = self._on_finish
+
+        # Envoyer tout dans un seul thread, puis passer au dashboard
+        def _save_all():
+            if not borne_id:
+                return
+            try:
+                supa.patch_borne(borne_id, {"setup_done": True})
+            except Exception:
+                pass
             if nom_lieu:
-                self._run(supa.patch_borne, lambda ok: None, self._borne_id, {"nom_lieu": nom_lieu})
-
-        if self._borne_id:
-            rows = []
-            for i, (inp_o, inp_f) in enumerate(self._horaires):
-                o, fv = inp_o.text().strip(), inp_f.text().strip()
-                rows.append({"jour": i, "ouverture": o or "00:00", "fermeture": fv or "00:00", "ferme": not o or not fv})
-            self._run(supa.save_horaires, lambda ok: None, self._borne_id, rows)
-
-            contacts = []
-            for c in self._contacts:
-                tel = c["tel"].text().strip()
-                email = c["email"].text().strip()
-                if tel or email:
-                    contacts.append({"email": email, "telephone": tel})
+                try:
+                    supa.patch_borne(borne_id, {"nom_lieu": nom_lieu})
+                except Exception:
+                    pass
+            try:
+                supa.save_horaires(borne_id, rows)
+            except Exception:
+                pass
             if contacts:
-                self._run(supa.save_alerte_destinataires, lambda ok: None, self._borne_id, contacts)
+                try:
+                    supa.save_alerte_destinataires(borne_id, contacts)
+                except Exception:
+                    pass
 
-        if self._on_finish:
-            self._on_finish()
+        def _on_saved(result):
+            if on_finish:
+                on_finish()
+
+        self._run(_save_all, _on_saved)
