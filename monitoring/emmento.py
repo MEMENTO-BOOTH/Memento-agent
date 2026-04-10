@@ -373,6 +373,9 @@ class EmentoWatcher:
                     return  # Pas de session en cours
 
         if m:
+            # Ignorer si cette photo est déjà détectée (doublon ancien/nouveau format)
+            if chemin in self._etat.get("photos", []):
+                return
 
             self._etat["photos"].append(chemin)
             self._etat["bar"] = _get_bar_from_path(chemin)
