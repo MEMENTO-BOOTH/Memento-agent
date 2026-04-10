@@ -311,7 +311,7 @@ class EmentoWatcher:
         if m:
             nouveau_id = m.group(1)
             if nouveau_id == self._etat.get("session_id"):
-                return  # Même session, ignorer le doublon
+                return
             code = _generer_code_unique(self._borne_id)
             self._etat = {
                 "session_id": nouveau_id,
@@ -326,58 +326,35 @@ class EmentoWatcher:
             alog.log_session(nouveau_id, code, "")
             alog.ui_log(f"Nouvelle session — code {code}")
             _generer_image_code(code)
-            # Envoyer immédiatement dans Supabase (sans photos, sera mis à jour au Print)
             _envoyer_supabase(
-                session_id=nouveau_id,
-                bar="inconnu",
-                timestamp=self._etat["timestamp"],
-                photos=[],
-                code=code,
-                originals=[],
-                borne_id=self._borne_id,
+                session_id=nouveau_id, bar="inconnu",
+                timestamp=self._etat["timestamp"], photos=[],
+                code=code, originals=[], borne_id=self._borne_id,
             )
             return
 
-        # Print détecté — ancien format (avec session_id)
+        # Print détecté — essayer ancien format puis nouveau
+        chemin = None
         m = RE_PRINT_OLD.search(ligne)
         if m:
-            session_id = m.group(1)
             chemin = m.group(2).strip()
-            if self._etat.get("session_id") != session_id:
-                code = _generer_code_unique(self._borne_id)
-                self._etat = {
-                    "session_id": session_id,
-                    "code": code,
-                    "photos": [],
-                    "originals": [],
-                    "timestamp": datetime.now().isoformat(),
-                }
-                _generer_image_code(code)
-                # Envoyer immédiatement dans Supabase
-                _envoyer_supabase(
-                    session_id=session_id,
-                    bar="inconnu",
-                    timestamp=self._etat["timestamp"],
-                    photos=[],
-                    code=code,
-                    originals=[],
-                    borne_id=self._borne_id,
-                )
         else:
-            # Print détecté — nouveau format (sans session_id)
             m = RE_PRINT_NEW.search(ligne)
             if m:
                 chemin = m.group(1).strip()
-                session_id = self._etat.get("session_id")
-                if not session_id:
-                    return  # Pas de session en cours
 
-        if m:
-            # Ignorer si cette photo est déjà détectée (doublon ancien/nouveau format)
-            if chemin in self._etat.get("photos", []):
-                return
+        if not chemin:
+            return
 
-            self._etat["photos"].append(chemin)
+        # Pas de session en cours → ignorer
+        if not self._etat.get("session_id"):
+            return
+
+        # Photo déjà détectée → ignorer (doublon ancien/nouveau format)
+        if chemin in self._etat.get("photos", []):
+            return
+
+        self._etat["photos"].append(chemin)
             self._etat["bar"] = _get_bar_from_path(chemin)
             self._etat["originals"] = _trouver_originals(
                 self._etat["bar"], time.time()
