@@ -357,13 +357,13 @@ class ConfigPage(QWidget):
             self._pin_inputs[idx + 1].setFocus()
 
     def _detect_borne(self):
-        self._run(supa.get_borne, self._on_borne)
+        self._run(supa.get_or_create_borne, self._on_borne)
 
     def _on_borne(self, data):
         if data:
             self._borne_id = data["id"]
             nom = data.get("nom_lieu", "")
-            if nom:
+            if nom and not nom.startswith("Borne "):
                 self._inp_nom_lieu.setText(nom)
 
     def _finish(self):
