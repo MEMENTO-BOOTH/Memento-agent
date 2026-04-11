@@ -137,11 +137,12 @@ def main():
     QFontDatabase.addApplicationFont(os.path.join(ASSETS_DIR, "Satoshi-Bold.ttf"))
     _log("fonts loaded")
 
-    # Démarrer le monitoring AVANT tout (PIN, setup, dashboard)
-    _start_monitoring_early(app)
-
     first = is_first_launch()
     _log(f"is_first_launch = {first}")
+
+    # Démarrer le monitoring AVANT le PIN (mais PAS avant le setup)
+    if not first:
+        _start_monitoring_early(app)
 
     if first:
         from setup import SetupWindow
@@ -151,6 +152,8 @@ def main():
         def on_setup_done():
             _log("on_setup_done called")
             app._setup.close()
+            # Démarrer le monitoring APRÈS le setup (le nom est enregistré)
+            _start_monitoring_early(app)
             open_dashboard(app)
 
         app._setup.setup_complete.connect(on_setup_done)
