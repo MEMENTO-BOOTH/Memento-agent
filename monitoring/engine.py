@@ -97,11 +97,17 @@ class MonitoringEngine(QThread):
 
         compteur = 0
         emmento_tick = 0
-        update_check_interval = 360
+        update_check_interval = 2  # vérifier mise à jour toutes les 2 cycles (2 min) — TEST
         tx_check_interval = 1  # vérifier transactions à chaque cycle (60s)
         delai_demarrage = 3  # ignorer alertes crash pendant 3 cycles (3 min)
         self._last_tx_count = 0
         self._check_initial_tx()
+
+        # Vérifier mise à jour dès le démarrage
+        try:
+            self._auto_update()
+        except Exception as e:
+            print(f"[MAJ] Erreur au démarrage: {e}")
 
         while self._running:
             compteur += 1
