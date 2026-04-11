@@ -269,6 +269,24 @@ class EmentoWatcher:
         try:
             if os.path.exists(DSLRBOOTH_LOG):
                 self._position = os.path.getsize(DSLRBOOTH_LOG)
+                # Récupérer la session en cours (dernier SessionID dans le log)
+                self._charger_session_courante()
+        except Exception:
+            pass
+
+    def _charger_session_courante(self):
+        """Lit les dernières lignes du log pour trouver la session active."""
+        try:
+            with open(DSLRBOOTH_LOG, "r", encoding="utf-8", errors="ignore") as f:
+                # Lire les 500 dernières lignes max
+                lignes = f.readlines()
+                for ligne in reversed(lignes[-500:]):
+                    m = RE_SESSION.search(ligne)
+                    if m:
+                        session_id = m.group(1)
+                        self._etat["session_id"] = session_id
+                        print(f"[EMMENTO] Session en cours récupérée: {session_id}")
+                        return
         except Exception:
             pass
 
