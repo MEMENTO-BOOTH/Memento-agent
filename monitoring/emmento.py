@@ -275,17 +275,31 @@ class EmentoWatcher:
             pass
 
     def _charger_session_courante(self):
-        """Lit les dernières lignes du log pour trouver la session active."""
+        """Lit les dernières lignes du log pour trouver la session active.
+        Génère un code et l'envoie dans Supabase pour que le Print puisse le rattacher."""
         try:
             with open(DSLRBOOTH_LOG, "r", encoding="utf-8", errors="ignore") as f:
-                # Lire les 500 dernières lignes max
                 lignes = f.readlines()
                 for ligne in reversed(lignes[-500:]):
                     m = RE_SESSION.search(ligne)
                     if m:
                         session_id = m.group(1)
-                        self._etat["session_id"] = session_id
-                        print(f"[EMMENTO] Session en cours récupérée: {session_id}")
+                        code = _generer_code_unique(self._borne_id)
+                        self._etat = {
+                            "session_id": session_id,
+                            "code": code,
+                            "photos": [],
+                            "originals": [],
+                            "bar": "inconnu",
+                            "timestamp": datetime.now().isoformat(),
+                        }
+                        print(f"[EMMENTO] Session en cours récupérée: {session_id} → code: {code}")
+                        _generer_image_code(code)
+                        _envoyer_supabase(
+                            session_id=session_id, bar="inconnu",
+                            timestamp=self._etat["timestamp"], photos=[],
+                            code=code, originals=[], borne_id=self._borne_id,
+                        )
                         return
         except Exception:
             pass
