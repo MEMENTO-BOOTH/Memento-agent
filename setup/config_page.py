@@ -392,8 +392,13 @@ class ConfigPage(QWidget):
 
         # Envoyer tout dans un seul thread, puis passer au dashboard
         def _save_all():
+            nonlocal borne_id
             if not borne_id:
-                return
+                borne = supa.get_or_create_borne()
+                if borne:
+                    borne_id = borne["id"]
+                else:
+                    return
             try:
                 supa.patch_borne(borne_id, {"setup_done": True})
             except Exception:
