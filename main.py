@@ -124,10 +124,51 @@ def _on_early_critique(has_critique):
         hide_rupture()
 
 
+def _setup_global_tray(app):
+    """Crée le tray dès le démarrage pour que l'app tourne en fond même sur l'écran PIN."""
+    from PyQt5.QtWidgets import QSystemTrayIcon, QMenu
+    from PyQt5.QtGui import QIcon
+
+    icon_path = os.path.join(ASSETS_DIR, "logo.ico")
+    icon = QIcon(icon_path) if os.path.exists(icon_path) else QIcon()
+    tray = QSystemTrayIcon(icon)
+    tray_menu = QMenu()
+
+    def _show_window():
+        # Montrer la fenêtre active (PIN ou dashboard)
+        for w in app.topLevelWidgets():
+            if w.isHidden() and hasattr(w, 'show'):
+                w.showNormal()
+                w.activateWindow()
+                break
+
+    def _quit():
+        # Arrêter le monitoring
+        if hasattr(app, '_monitor') and app._monitor and app._monitor.isRunning():
+            app._monitor.stop()
+            app._monitor.wait(3000)
+        tray.hide()
+        app.quit()
+
+    act_show = tray_menu.addAction("Ouvrir Memento Agent")
+    act_show.triggered.connect(_show_window)
+    tray_menu.addSeparator()
+    act_quit = tray_menu.addAction("Quitter")
+    act_quit.triggered.connect(_quit)
+
+    tray.setContextMenu(tray_menu)
+    tray.setToolTip("Memento Agent — Monitoring actif")
+    tray.activated.connect(lambda reason: _show_window() if reason == QSystemTrayIcon.DoubleClick else None)
+    tray.show()
+    app._tray = tray
+    _log("tray created (global)")
+
+
 def main():
     _log("main() enter")
     _install_exception_hook()
     app = QApplication(sys.argv)
+    app.setQuitOnLastWindowClosed(False)  # Ne pas quitter quand toutes les fenêtres sont fermées
     _log("QApplication created")
 
     QFontDatabase.addApplicationFont(os.path.join(ASSETS_DIR, "Inter-Regular.ttf"))
@@ -136,6 +177,9 @@ def main():
     QFontDatabase.addApplicationFont(os.path.join(ASSETS_DIR, "Satoshi-Medium.ttf"))
     QFontDatabase.addApplicationFont(os.path.join(ASSETS_DIR, "Satoshi-Bold.ttf"))
     _log("fonts loaded")
+
+    # Tray global — l'app tourne en fond même sur l'écran PIN
+    _setup_global_tray(app)
 
     first = is_first_launch()
     _log(f"is_first_launch = {first}")
