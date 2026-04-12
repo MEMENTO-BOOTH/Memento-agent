@@ -1147,9 +1147,12 @@ class DashboardWindow(QMainWindow):
         self._force_quit = True
         if hasattr(self, '_refresh_timer'):
             self._refresh_timer.stop()
-        if hasattr(self, '_monitor') and self._monitor.isRunning():
-            self._monitor.stop()
-            self._monitor.wait(3000)
+        # Arrêter le monitoring seulement si on quitte vraiment l'app
+        if hasattr(self, '_monitor') and self._monitor and not self._existing_monitor:
+            # Monitoring créé par le dashboard (fallback) → on peut l'arrêter
+            if self._monitor.isRunning():
+                self._monitor.stop()
+                self._monitor.wait(3000)
         if hasattr(self, '_tray'):
             self._tray.hide()
         QApplication.instance().quit()
