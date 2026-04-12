@@ -126,24 +126,28 @@ def _on_early_critique(has_critique):
 
 def _setup_global_tray(app):
     """Crée le tray dès le démarrage pour que l'app tourne en fond même sur l'écran PIN."""
-    from PyQt5.QtWidgets import QSystemTrayIcon, QMenu
+    from PyQt5.QtWidgets import QSystemTrayIcon, QMenu, QAction
     from PyQt5.QtGui import QIcon
+
+    if not QSystemTrayIcon.isSystemTrayAvailable():
+        _log("tray NOT available on this system")
+        return
 
     icon_path = os.path.join(ASSETS_DIR, "logo.ico")
     icon = QIcon(icon_path) if os.path.exists(icon_path) else QIcon()
+
+    # Créer avec un parent (app ne marche pas, utiliser None mais stocker les refs)
     tray = QSystemTrayIcon(icon)
     tray_menu = QMenu()
 
     def _show_window():
-        # Montrer la fenêtre active (PIN ou dashboard)
         for w in app.topLevelWidgets():
-            if w.isHidden() and hasattr(w, 'show'):
+            if hasattr(w, 'show'):
                 w.showNormal()
                 w.activateWindow()
-                break
+                return
 
     def _quit():
-        # Arrêter le monitoring
         if hasattr(app, '_monitor') and app._monitor and app._monitor.isRunning():
             app._monitor.stop()
             app._monitor.wait(3000)
@@ -160,8 +164,11 @@ def _setup_global_tray(app):
     tray.setToolTip("Memento Agent — Monitoring actif")
     tray.activated.connect(lambda reason: _show_window() if reason == QSystemTrayIcon.DoubleClick else None)
     tray.show()
+
+    # Stocker tout pour éviter le garbage collection
     app._tray = tray
-    _log("tray created (global)")
+    app._tray_menu = tray_menu
+    _log(f"tray created (global), visible={tray.isVisible()}")
 
 
 def main():

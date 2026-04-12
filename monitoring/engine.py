@@ -261,6 +261,16 @@ class MonitoringEngine(QThread):
         if not latest or latest == VERSION:
             return
 
+        # Comparer les versions numériquement pour éviter les downgrades
+        def _parse_version(v):
+            try:
+                return [int(x) for x in v.split(".")]
+            except (ValueError, AttributeError):
+                return [0]
+
+        if _parse_version(latest) <= _parse_version(VERSION):
+            return
+
         url = update.get("fichier_url", "")
         if not url:
             return
