@@ -27,6 +27,11 @@ class LockScreen(QWidget):
         self._error_lbl = None
         self._build()
 
+    def closeEvent(self, event):
+        """Se cacher dans le tray au lieu de quitter."""
+        event.ignore()
+        self.hide()
+
     def _get_saved_pin(self):
         return reg_get("pin") or "0000"
 
