@@ -97,7 +97,7 @@ class MonitoringEngine(QThread):
 
         compteur = 0
         emmento_tick = 0
-        update_check_interval = 2  # vérifier mise à jour toutes les 2 cycles (2 min) — TEST
+        update_check_interval = 360  # vérifier mise à jour toutes les 6 heures
         tx_check_interval = 1  # vérifier transactions à chaque cycle (60s)
         delai_demarrage = 3  # ignorer alertes crash pendant 3 cycles (3 min)
         self._last_tx_count = 0
