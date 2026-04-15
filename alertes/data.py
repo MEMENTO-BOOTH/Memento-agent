@@ -56,6 +56,7 @@ TYPE_TO_ICON = {
     "papier_bas":         "icon_papier_bas.svg",
     "disque_bas":         "icon_disque_bas.svg",
     "crash_relance":      "icon_crash_relance.svg",
+    "impression_non_delivree": "icon_impression_non_delivree.svg",
 }
 
 # ─── Mapping code imprimante → type alerte (depuis twilio_1.0.0) ─────────
@@ -94,6 +95,7 @@ TYPE_LABELS = {
     "coupe_incoherente": "Coupe 2 pouces désactivée",
     "crash_relance":      "Crash relancé",
     "borne_hors_ligne":   "Borne hors ligne",
+    "impression_non_delivree": "Impression non délivrée",
 }
 
 

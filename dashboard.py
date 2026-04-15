@@ -21,19 +21,25 @@ from paths import ASSETS_DIR
 
 
 def _utc_to_local(ts_str):
-    """Convertit un timestamp UTC Supabase en heure locale lisible."""
+    """Convertit un timestamp Supabase en heure locale lisible.
+    Si le timestamp contient +00:00 ou Z, c'est UTC → on convertit.
+    Sinon c'est déjà en heure locale → on affiche tel quel."""
     if not ts_str:
         return "—"
     try:
         from datetime import datetime, timezone, timedelta
-        # Parse ISO format (2026-03-30T14:59:58.462539+00:00)
+        is_utc = "+00:00" in ts_str or ts_str.endswith("Z")
         clean = ts_str.replace("+00:00", "").replace("Z", "")
+        # Enlever les autres timezones (+02:00, etc.)
+        if "+" in clean and clean.index("+") > 10:
+            clean = clean[:clean.index("+")]
         if "." in clean:
-            clean = clean[:clean.index(".")]  # Retirer microsecondes
-        utc_dt = datetime.strptime(clean, "%Y-%m-%dT%H:%M:%S")
-        utc_dt = utc_dt.replace(tzinfo=timezone.utc)
-        local_dt = utc_dt.astimezone()
-        return local_dt.strftime("%Y-%m-%d %H:%M:%S")
+            clean = clean[:clean.index(".")]
+        dt = datetime.strptime(clean, "%Y-%m-%dT%H:%M:%S")
+        if is_utc:
+            dt = dt.replace(tzinfo=timezone.utc)
+            dt = dt.astimezone()
+        return dt.strftime("%Y-%m-%d %H:%M:%S")
     except Exception:
         return ts_str[:19].replace("T", " ")
 

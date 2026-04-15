@@ -74,4 +74,5 @@ TOUS_TYPES_ALERTES = [
     "surchauffe", "papier_bas", "camera_deconnectee",
     "crash_dslrbooth", "disque_bas", "disque_plein",
     "crash_relance", "borne_hors_ligne",
+    "impression_non_delivree",  # client a payé, papier jamais sorti (vérif DS620 GetMediaCounter)
 ]

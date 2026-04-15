@@ -303,7 +303,7 @@ def get_ca_stats(transactions):
     total = len(transactions)
     reussies = sum(1 for t in transactions if t.get("impression_declenchee"))
     echouees = total - reussies
-    montant = sum(float(t.get("montant", 0)) for t in transactions if t.get("impression_declenchee"))
+    montant = sum(float(t.get("montant", 0)) for t in transactions)
     anomalies = sum(1 for t in transactions if t.get("flag"))
     return {
         "total": total,

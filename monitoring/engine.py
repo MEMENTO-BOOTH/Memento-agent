@@ -12,6 +12,7 @@ from .coupe_2pouces import startup_hardware
 from .emmento import EmentoWatcher, _expirer_anciens_codes
 from .drive_backup import DriveBackup
 from .cashinterface import CashInterfaceWatcher
+from .printer_counter import PrinterCounterWatcher
 
 
 class MonitoringEngine(QThread):
@@ -85,9 +86,10 @@ class MonitoringEngine(QThread):
         # Initialiser e-memento watcher + drive backup
         self._emmento = EmentoWatcher(self._borne_id)
         self._cash = CashInterfaceWatcher(self._borne_id)
+        self._printer_counter = PrinterCounterWatcher(self._borne_id, self._nom_lieu)
         drive_folder = f"{self._nom_lieu} ({borne.get('code', socket.gethostname())})"
         self._drive = DriveBackup(drive_folder)
-        print("[MONITORING] E-memento + CashInterface + Drive backup initialisés")
+        print("[MONITORING] E-memento + CashInterface + PrinterCounter + Drive backup initialisés")
 
         # Expirer les anciens codes au démarrage
         try:
@@ -176,6 +178,10 @@ class MonitoringEngine(QThread):
                         self._cash.tick()
                     except Exception as e:
                         print(f"[CASH] Erreur: {e}")
+                    try:
+                        self._printer_counter.tick()
+                    except Exception as e:
+                        print(f"[PRINTER_COUNTER] Erreur: {e}")
 
         print(f"[MONITORING] Arrêté après {compteur} cycles.")
 
