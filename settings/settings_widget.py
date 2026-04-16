@@ -314,7 +314,7 @@ class SettingsWidget(QWidget):
                 lbl.setStyleSheet(f"color: {color}; font-family: 'Inter'; font-size: 12px; font-weight: 400; background: transparent;")
 
     def _fetch_updates(self):
-        self._run(supa.get_latest_update, self._on_update_checked)
+        self._run(supa.get_latest_github_release, self._on_update_checked)
 
     # ═══════════════════════════════════════════════
     #  ACTIONS — MAINTENANCE
@@ -613,7 +613,7 @@ class SettingsWidget(QWidget):
             "color: rgba(255,255,255,0.7); font-family: 'Satoshi'; "
             "font-size: 12px; background: transparent;"
         )
-        self._run(supa.get_latest_update, self._on_update_checked)
+        self._run(supa.get_latest_github_release, self._on_update_checked)
 
     def _on_update_checked(self, data):
         from version import VERSION
@@ -655,25 +655,34 @@ class SettingsWidget(QWidget):
 
     @staticmethod
     def _download_and_install(update_data):
-        """Télécharge le fichier de mise à jour depuis Supabase Storage."""
+        """Télécharge le .exe depuis GitHub Releases (repo privé)."""
         import requests
         import tempfile
+        import os
 
-        url = update_data.get("fichier_url", "")
+        url = update_data.get("download_url", "") or update_data.get("fichier_url", "")
         if not url:
             return {"ok": False, "error": "URL manquante"}
 
         try:
-            r = requests.get(url, timeout=60, stream=True)
+            headers = {}
+            if "api.github.com" in url:
+                headers = {
+                    "Authorization": f"token {supa.GITHUB_TOKEN}",
+                    "Accept": "application/octet-stream",
+                }
+            r = requests.get(url, timeout=120, stream=True, headers=headers)
             if r.status_code != 200:
                 return {"ok": False, "error": f"HTTP {r.status_code}"}
 
-            # Sauvegarder dans un fichier temporaire
-            ext = url.rsplit(".", 1)[-1] if "." in url else "exe"
-            tmp = tempfile.NamedTemporaryFile(suffix=f".{ext}", delete=False)
+            tmp = tempfile.NamedTemporaryFile(suffix=".exe", delete=False)
             for chunk in r.iter_content(chunk_size=8192):
                 tmp.write(chunk)
             tmp.close()
+
+            if os.path.getsize(tmp.name) < 1_000_000:
+                os.unlink(tmp.name)
+                return {"ok": False, "error": "Fichier trop petit"}
 
             return {"ok": True, "path": tmp.name, "version": update_data.get("version")}
 

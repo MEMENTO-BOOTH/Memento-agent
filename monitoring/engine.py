@@ -99,7 +99,7 @@ class MonitoringEngine(QThread):
 
         compteur = 0
         emmento_tick = 0
-        update_check_interval = 360  # vérifier mise à jour toutes les 6 heures
+        update_check_interval = 5  # vérifier mise à jour toutes les 5 min (TEST)
         tx_check_interval = 1  # vérifier transactions à chaque cycle (60s)
         delai_demarrage = 3  # ignorer alertes crash pendant 3 cycles (3 min)
         self._last_tx_count = 0
@@ -259,19 +259,12 @@ class MonitoringEngine(QThread):
 
         from version import VERSION
 
-        # Essayer GitHub d'abord, fallback sur Supabase
         release = supa.get_latest_github_release()
-        if release:
-            latest = release.get("version", "")
-            download_url = release.get("download_url", "")
-            use_github = True
-        else:
-            update = supa.get_latest_update()
-            if not update:
-                return
-            latest = update.get("version", "")
-            download_url = update.get("fichier_url", "")
-            use_github = False
+        if not release:
+            return
+
+        latest = release.get("version", "")
+        download_url = release.get("download_url", "")
 
         if not latest or latest == VERSION:
             return
@@ -289,16 +282,13 @@ class MonitoringEngine(QThread):
         if not download_url:
             return
 
-        print(f"[MAJ] Nouvelle version disponible: {latest} (actuelle: {VERSION}) via {'GitHub' if use_github else 'Supabase'}")
+        print(f"[MAJ] Nouvelle version disponible: {latest} (actuelle: {VERSION})")
 
         try:
-            if use_github:
-                r = requests.get(download_url, timeout=120, stream=True, headers={
-                    "Authorization": f"token {supa.GITHUB_TOKEN}",
-                    "Accept": "application/octet-stream",
-                })
-            else:
-                r = requests.get(download_url, timeout=120, stream=True)
+            r = requests.get(download_url, timeout=120, stream=True, headers={
+                "Authorization": f"token {supa.GITHUB_TOKEN}",
+                "Accept": "application/octet-stream",
+            })
 
             if r.status_code != 200:
                 print(f"[MAJ] Erreur téléchargement: HTTP {r.status_code}")
