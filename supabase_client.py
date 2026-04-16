@@ -434,6 +434,29 @@ def save_alerte_destinataires(borne_id, contacts):
         return False
 
 
+def record_paper_history(borne_id, feuilles_restantes):
+    """Insère une ligne dans paper_history (1x par jour max)."""
+    from datetime import date
+    today = date.today().isoformat()
+    try:
+        r = requests.get(
+            _url(f"paper_history?borne_id=eq.{borne_id}&recorded_at=gte.{today}&select=id&limit=1"),
+            headers=HEADERS, timeout=TIMEOUT,
+        )
+        if r.status_code == 200 and r.json():
+            return True
+        r = requests.post(
+            _url("paper_history"),
+            headers=HEADERS_MINIMAL,
+            json={"borne_id": borne_id, "feuilles_restantes": feuilles_restantes},
+            timeout=TIMEOUT,
+        )
+        return r.status_code in (200, 201)
+    except Exception as e:
+        print(f"[SUPABASE] record_paper_history error: {e}")
+        return False
+
+
 def get_printer_status_config():
     """Récupère la palette d'erreurs (table printer_status_config)."""
     try:

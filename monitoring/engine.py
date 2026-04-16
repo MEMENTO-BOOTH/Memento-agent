@@ -104,6 +104,7 @@ class MonitoringEngine(QThread):
         tx_check_interval = 1  # vérifier transactions à chaque cycle (60s)
         delai_demarrage = 3  # ignorer alertes crash pendant 3 cycles (3 min)
         self._last_tx_count = 0
+        self._paper_history_done_today = None
         self._check_initial_tx()
 
         # Vérifier mise à jour dès le démarrage
@@ -144,6 +145,16 @@ class MonitoringEngine(QThread):
                     self._drive.tick()
                 except Exception as e:
                     print(f"[DRIVE] Erreur: {e}")
+
+                # 4b. Historique papier (1x par jour)
+                from datetime import date
+                today = date.today().isoformat()
+                if self._paper_history_done_today != today:
+                    feuilles = donnees.get("feuilles_restantes")
+                    if feuilles is not None:
+                        if supa.record_paper_history(self._borne_id, feuilles):
+                            self._paper_history_done_today = today
+                            print(f"[PAPER] Historique enregistré: {feuilles} feuilles")
 
                 # 5. Vérifier nouvelles transactions TPE (toutes les 5 min)
                 if compteur % tx_check_interval == 0:
