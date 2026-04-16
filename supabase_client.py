@@ -107,9 +107,9 @@ def get_or_create_borne():
         )
         if r.status_code in (200, 201) and r.json():
             borne = r.json()[0]
-            # Créer les horaires par défaut (7 jours, ouverts 09:00-21:00)
+            # Créer les horaires par défaut (7 jours, ouverts 24h/24)
             horaires_defaut = [
-                {"borne_id": borne["id"], "jour": j, "ouverture": "09:00:00", "fermeture": "21:00:00", "ferme": False}
+                {"borne_id": borne["id"], "jour": j, "ouverture": "00:00:00", "fermeture": "23:59:00", "ferme": False}
                 for j in range(7)
             ]
             try:
