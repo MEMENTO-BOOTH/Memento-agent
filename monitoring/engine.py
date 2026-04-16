@@ -2,6 +2,7 @@
 Remplace les 4 scripts séparés (remontee, twilio, ememento_watcher, drive).
 Lance le heartbeat + alertes + e-memento + drive backup dans un QThread."""
 
+import os
 import time
 import socket
 from PyQt5.QtCore import QThread, pyqtSignal
@@ -106,10 +107,14 @@ class MonitoringEngine(QThread):
         self._check_initial_tx()
 
         # Vérifier mise à jour dès le démarrage
+        print("[MAJ] Vérification au démarrage...")
         try:
             self._auto_update()
+            print("[MAJ] Vérification terminée")
         except Exception as e:
             print(f"[MAJ] Erreur au démarrage: {e}")
+            import traceback
+            traceback.print_exc()
 
         while self._running:
             compteur += 1
@@ -251,6 +256,17 @@ class MonitoringEngine(QThread):
         except Exception as e:
             print(f"[TPE] Erreur check transactions: {e}")
 
+    def _log_maj(self, msg):
+        """Log mise à jour dans un fichier dédié."""
+        try:
+            log_path = os.path.join(os.environ.get("LOCALAPPDATA", ""), "MementoAgent", "maj.log")
+            with open(log_path, "a", encoding="utf-8") as f:
+                from datetime import datetime
+                f.write(f"{datetime.now().strftime('%H:%M:%S')} {msg}\n")
+        except Exception:
+            pass
+        print(msg)
+
     def _auto_update(self):
         """Vérifie et installe automatiquement les mises à jour depuis GitHub."""
         import requests
@@ -259,7 +275,9 @@ class MonitoringEngine(QThread):
 
         from version import VERSION
 
+        self._log_maj(f"[MAJ] Verification... VERSION={VERSION} TOKEN={'OK' if supa.GITHUB_TOKEN else 'MANQUANT'}")
         release = supa.get_latest_github_release()
+        self._log_maj(f"[MAJ] Release GitHub: {release.get('version') if release else 'RIEN'}")
         if not release:
             return
 
@@ -267,6 +285,7 @@ class MonitoringEngine(QThread):
         download_url = release.get("download_url", "")
 
         if not latest or latest == VERSION:
+            self._log_maj(f"[MAJ] Deja a jour ({VERSION})")
             return
 
         # Comparer les versions numériquement pour éviter les downgrades
@@ -277,12 +296,13 @@ class MonitoringEngine(QThread):
                 return [0]
 
         if _parse_version(latest) <= _parse_version(VERSION):
+            self._log_maj(f"[MAJ] Pas de mise a jour ({latest} <= {VERSION})")
             return
 
         if not download_url:
             return
 
-        print(f"[MAJ] Nouvelle version disponible: {latest} (actuelle: {VERSION})")
+        self._log_maj(f"[MAJ] Nouvelle version: {latest} (actuelle: {VERSION}), telechargement...")
 
         try:
             r = requests.get(download_url, timeout=120, stream=True, headers={
