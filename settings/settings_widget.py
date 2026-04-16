@@ -624,7 +624,14 @@ class SettingsWidget(QWidget):
             return
 
         latest_version = data.get("version", "")
-        if latest_version and latest_version != current:
+
+        def _parse_version(v):
+            try:
+                return [int(x) for x in v.split(".")]
+            except (ValueError, AttributeError):
+                return [0]
+
+        if latest_version and _parse_version(latest_version) > _parse_version(current):
             self._latest_update = data
             self._ref_maj["lbl_latest"].setText(
                 f"Une nouvelle version est disponible : v{latest_version}"
