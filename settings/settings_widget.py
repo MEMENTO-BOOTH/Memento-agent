@@ -276,10 +276,9 @@ class SettingsWidget(QWidget):
         coupe_on = data.get("mode_coupe") == "Coupe activée"
         self._ref_imp["toggle_coupe"].set_on(coupe_on)
 
-        # Version agent
-        v = data.get("version_agent")
-        if v:
-            self._ref_maj["lbl_version"].setText(v)
+        # Version agent — toujours afficher la version locale
+        from version import VERSION
+        self._ref_maj["lbl_version"].setText(f"Version actuelle : v{VERSION}")
 
     def _fetch_horaires(self):
         self._run(supa.get_horaires, self._on_horaires_loaded, self._borne_id)
