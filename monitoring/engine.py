@@ -252,18 +252,27 @@ class MonitoringEngine(QThread):
             print(f"[TPE] Erreur check transactions: {e}")
 
     def _auto_update(self):
-        """Vérifie et installe automatiquement les mises à jour."""
+        """Vérifie et installe automatiquement les mises à jour depuis GitHub."""
         import requests
         import tempfile
         import subprocess
 
         from version import VERSION
 
-        update = supa.get_latest_update()
-        if not update:
-            return
+        # Essayer GitHub d'abord, fallback sur Supabase
+        release = supa.get_latest_github_release()
+        if release:
+            latest = release.get("version", "")
+            download_url = release.get("download_url", "")
+            use_github = True
+        else:
+            update = supa.get_latest_update()
+            if not update:
+                return
+            latest = update.get("version", "")
+            download_url = update.get("fichier_url", "")
+            use_github = False
 
-        latest = update.get("version", "")
         if not latest or latest == VERSION:
             return
 
@@ -277,40 +286,36 @@ class MonitoringEngine(QThread):
         if _parse_version(latest) <= _parse_version(VERSION):
             return
 
-        url = update.get("fichier_url", "")
-        if not url:
+        if not download_url:
             return
 
-        print(f"[MAJ] Nouvelle version disponible: {latest} (actuelle: {VERSION})")
+        print(f"[MAJ] Nouvelle version disponible: {latest} (actuelle: {VERSION}) via {'GitHub' if use_github else 'Supabase'}")
 
-        # Télécharger (URL Supabase Storage — publique, pas besoin de token)
         try:
-            r = requests.get(url, timeout=120, stream=True)
+            if use_github:
+                r = requests.get(download_url, timeout=120, stream=True, headers={
+                    "Authorization": f"token {supa.GITHUB_TOKEN}",
+                    "Accept": "application/octet-stream",
+                })
+            else:
+                r = requests.get(download_url, timeout=120, stream=True)
+
             if r.status_code != 200:
                 print(f"[MAJ] Erreur téléchargement: HTTP {r.status_code}")
                 return
 
-            ext = url.rsplit(".", 1)[-1] if "." in url else "exe"
-            tmp = tempfile.NamedTemporaryFile(suffix=f".{ext}", delete=False)
+            tmp = tempfile.NamedTemporaryFile(suffix=".exe", delete=False)
             for chunk in r.iter_content(chunk_size=8192):
                 tmp.write(chunk)
             tmp.close()
-            print(f"[MAJ] Téléchargé: {tmp.name}")
 
-            # Marquer dans Supabase
-            try:
-                requests.post(
-                    f"{supa.SUPABASE_URL}/rest/v1/updates_bornes",
-                    headers=supa.HEADERS_MINIMAL,
-                    json={
-                        "borne_id": self._borne_id,
-                        "update_id": update.get("id"),
-                        "statut": "installee",
-                    },
-                    timeout=10,
-                )
-            except Exception:
-                pass
+            # Vérifier que le fichier est un vrai .exe (> 1 Mo)
+            if os.path.getsize(tmp.name) < 1_000_000:
+                print(f"[MAJ] Fichier trop petit ({os.path.getsize(tmp.name)} octets), pas un .exe valide")
+                os.unlink(tmp.name)
+                return
+
+            print(f"[MAJ] Téléchargé: {tmp.name} ({os.path.getsize(tmp.name)} octets)")
 
             # Lancer l'installeur silencieusement (/VERYSILENT pour Inno Setup)
             print(f"[MAJ] Installation silencieuse...")

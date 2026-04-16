@@ -38,6 +38,8 @@ def _load_env():
 _env = _load_env()
 SUPABASE_URL = os.environ.get("SUPABASE_URL") or _env.get("SUPABASE_URL", "")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY") or _env.get("SUPABASE_KEY", "")
+GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN") or _env.get("GITHUB_TOKEN", "")
+GITHUB_REPO = "MEMENTO-BOOTH/Memento-agent"
 
 HEADERS = {
     "apikey": SUPABASE_KEY,
@@ -326,6 +328,41 @@ def get_latest_update():
     except Exception:
         pass
     return None
+
+
+def get_latest_github_release():
+    """Récupère la dernière release depuis GitHub (repo privé)."""
+    if not GITHUB_TOKEN:
+        return None
+    try:
+        r = requests.get(
+            f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest",
+            headers={
+                "Authorization": f"token {GITHUB_TOKEN}",
+                "Accept": "application/vnd.github.v3+json",
+            },
+            timeout=TIMEOUT,
+        )
+        if r.status_code != 200:
+            return None
+        release = r.json()
+        version = release.get("tag_name", "").lstrip("v")
+        notes = release.get("body", "")
+        exe_asset = None
+        for asset in release.get("assets", []):
+            if asset["name"].endswith(".exe"):
+                exe_asset = asset
+                break
+        if not exe_asset:
+            return None
+        return {
+            "version": version,
+            "download_url": exe_asset["url"],
+            "filename": exe_asset["name"],
+            "notes": notes,
+        }
+    except Exception:
+        return None
 
 
 def get_update_status(borne_id):
