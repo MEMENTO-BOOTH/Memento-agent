@@ -1,5 +1,5 @@
 #define MyAppName "Memento Agent"
-#define MyAppVersion "1.0.18.5"
+#define MyAppVersion "1.0.18.6"
 #define MyAppPublisher "Memento Booth"
 #define MyAppExeName "MementoAgent.exe"
 #define MyAppIconFile "assets\logo.ico"
