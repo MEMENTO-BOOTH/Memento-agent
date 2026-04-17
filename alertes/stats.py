@@ -1,7 +1,7 @@
 """Calcul des statistiques d'alertes."""
 
 # Types visuellement "warning" (orange) — même si Supabase dit "critique"
-_TYPES_WARNING_VISUEL = {"surchauffe", "papier_bas", "disque_bas", "coupe_incoherente", "crash_relance", "borne_hors_ligne", "impression_non_delivree"}
+_TYPES_WARNING_VISUEL = {"surchauffe", "papier_bas", "disque_bas", "coupe_incoherente", "crash_relance", "borne_hors_ligne", "impression_non_delivree", "drive_deconnecte"}
 
 
 def compute_stats(alertes):

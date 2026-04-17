@@ -89,7 +89,7 @@ class MonitoringEngine(QThread):
         self._cash = CashInterfaceWatcher(self._borne_id)
         self._printer_counter = PrinterCounterWatcher(self._borne_id, self._nom_lieu)
         drive_folder = f"{self._nom_lieu} ({borne.get('code', socket.gethostname())})"
-        self._drive = DriveBackup(drive_folder)
+        self._drive = DriveBackup(drive_folder, self._borne_id)
         print("[MONITORING] E-memento + CashInterface + PrinterCounter + Drive backup initialisés")
 
         # Expirer les anciens codes au démarrage

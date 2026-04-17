@@ -125,12 +125,14 @@ def _copier(src, dst):
 class DriveBackup:
     """Backup Google Drive — tourne dans le thread de monitoring."""
 
-    def __init__(self, nom_lieu):
+    def __init__(self, nom_lieu, borne_id=None):
         self._nom_lieu = nom_lieu
+        self._borne_id = borne_id
         self._drive_base = None
         self._events = {}  # event_name → {"originals": set, "prints": set}
         self._current_event = None
         self._total_copies = 0
+        self._drive_alerte_envoyee = False
         self._init_drive()
 
     def _init_drive(self):
@@ -140,9 +142,50 @@ class DriveBackup:
             import activity_logger as alog
             alog.log_drive_inaccessible()
             alog.ui_log("Google Drive inaccessible")
+            self._creer_alerte_drive()
             return
+        # Drive trouvé — vérifier qu'on peut écrire
+        try:
+            test_path = os.path.join(drive, ".memento_test")
+            with open(test_path, "w") as f:
+                f.write("test")
+            os.remove(test_path)
+        except Exception:
+            print("[DRIVE] Google Drive en lecture seule ou déconnecté")
+            import activity_logger as alog
+            alog.ui_log("Google Drive déconnecté ou en lecture seule")
+            self._creer_alerte_drive()
+            return
+        # Tout OK — résoudre l'alerte si elle était ouverte
         self._drive_base = os.path.join(drive, "dslrBooth", self._nom_lieu)
+        self._resoudre_alerte_drive()
+        self._drive_alerte_envoyee = False
         print(f"[DRIVE] Base: {self._drive_base}")
+
+    def _creer_alerte_drive(self):
+        if self._drive_alerte_envoyee or not self._borne_id:
+            return
+        self._drive_alerte_envoyee = True
+        try:
+            from monitoring.alertes.alertes_monitor import _creer_alerte, _alerte_deja_ouverte
+            if not _alerte_deja_ouverte(self._borne_id, "drive_deconnecte"):
+                bar = self._nom_lieu.split(" (")[0] if " (" in self._nom_lieu else self._nom_lieu
+                _creer_alerte(
+                    self._borne_id, "drive_deconnecte", "drive",
+                    f"Google Drive deconnecte ou inaccessible sur {bar}.",
+                    "warning",
+                )
+        except Exception as e:
+            print(f"[DRIVE] Erreur creation alerte: {e}")
+
+    def _resoudre_alerte_drive(self):
+        if not self._borne_id:
+            return
+        try:
+            from monitoring.alertes.alertes_monitor import _resoudre_alertes
+            _resoudre_alertes(self._borne_id, ["drive_deconnecte"])
+        except Exception:
+            pass
 
     def tick(self):
         """Appelé à chaque cycle du monitoring."""
@@ -151,6 +194,15 @@ class DriveBackup:
             self._init_drive()
             if not self._drive_base:
                 return
+        else:
+            # Vérifier que le Drive est toujours accessible
+            if not os.path.isdir(self._drive_base):
+                drive = _trouver_google_drive()
+                if not drive:
+                    print("[DRIVE] Google Drive déconnecté")
+                    self._drive_base = None
+                    self._creer_alerte_drive()
+                    return
 
         # Détecter l'événement actif
         event = _detecter_evenement()
