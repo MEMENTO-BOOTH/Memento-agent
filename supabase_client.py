@@ -485,6 +485,25 @@ def verifier_pin(pin):
     return None
 
 
+def upsert_user_connection(user_id, borne_id):
+    """Enregistre qu'un utilisateur s'est connecté sur une borne."""
+    try:
+        r = requests.post(
+            _url("user_connections?on_conflict=user_id,borne_id"),
+            headers=HEADERS_UPSERT,
+            json={
+                "user_id": user_id,
+                "borne_id": borne_id,
+                "last_seen": __import__("datetime").datetime.now().astimezone().isoformat(),
+            },
+            timeout=TIMEOUT,
+        )
+        return r.status_code in (200, 201)
+    except Exception as e:
+        print(f"[SUPABASE] upsert_user_connection error: {e}")
+        return False
+
+
 def save_printer_status_config(config_id, data):
     """Met à jour la gravité d'un code erreur."""
     try:

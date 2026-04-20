@@ -130,6 +130,13 @@ class LockScreen(QWidget):
         user = supa.verifier_pin(entered)
         if user:
             user_session.set_user(user)
+            # Enregistrer la connexion utilisateur ↔ borne (non-bloquant)
+            try:
+                borne = supa.get_borne()
+                if borne and user.get("id"):
+                    supa.upsert_user_connection(user["id"], borne["id"])
+            except Exception:
+                pass
             self._error_lbl.setText("")
             self.unlocked.emit()
             return
