@@ -221,10 +221,6 @@ class RuptureScreen(QWidget):
                 dlg.accept()
                 self.hide()
                 return
-            if pin == (reg_get("pin") or "0000"):
-                dlg.accept()
-                self.hide()
-                return
             err.setText("Code PIN incorrect")
             inp.clear()
 

@@ -133,6 +133,7 @@ class DriveBackup:
         self._current_event = None
         self._total_copies = 0
         self._drive_alerte_envoyee = False
+        self._start_time = time.time()  # Ne copier que les fichiers créés après ce moment
         self._init_drive()
 
     def _init_drive(self):
@@ -224,7 +225,7 @@ class DriveBackup:
         self._scanner(event)
 
     def _init_event(self, event_name):
-        """Initialise le suivi + rattrapage des fichiers manquants."""
+        """Initialise le suivi. Ne copie que les fichiers créés après le démarrage de l'agent."""
         orig_local = os.path.join(DSLRBOOTH_BASE, event_name, "Originals")
         prints_local = os.path.join(DSLRBOOTH_BASE, event_name, "Prints")
         drive_orig = os.path.join(self._drive_base, event_name, "Originals")
@@ -237,29 +238,30 @@ class DriveBackup:
             print(f"[DRIVE] Erreur création dossiers: {e}")
             return
 
-        # Rattrapage : copier les fichiers manquants
+        # Lister les fichiers locaux (tous) pour le suivi
         local_orig = _lister_jpgs(orig_local)
         local_prints = _lister_jpgs(prints_local, exclure_thumb=True)
+
+        # Copier uniquement les fichiers manquants dans le Drive ET créés après le démarrage
         drive_orig_set = _lister_jpgs(drive_orig)
         drive_prints_set = _lister_jpgs(drive_prints, exclure_thumb=True)
-
         manquants_orig = local_orig - drive_orig_set
         manquants_prints = local_prints - drive_prints_set
 
         nb = 0
         for f in sorted(manquants_orig):
             src = os.path.join(orig_local, f)
-            if _fichier_valide(src, TAILLE_MIN_ORIGINAL):
+            if os.path.getmtime(src) >= self._start_time and _fichier_valide(src, TAILLE_MIN_ORIGINAL):
                 if _copier(src, os.path.join(drive_orig, f)):
                     nb += 1
         for f in sorted(manquants_prints):
             src = os.path.join(prints_local, f)
-            if _fichier_valide(src, TAILLE_MIN_PRINT):
+            if os.path.getmtime(src) >= self._start_time and _fichier_valide(src, TAILLE_MIN_PRINT):
                 if _copier(src, os.path.join(drive_prints, f)):
                     nb += 1
 
         if nb:
-            print(f"[DRIVE] Rattrapage {event_name}: {nb} fichier(s)")
+            print(f"[DRIVE] Copie {event_name}: {nb} nouveau(x) fichier(s)")
 
         self._events[event_name] = {
             "originals": local_orig,

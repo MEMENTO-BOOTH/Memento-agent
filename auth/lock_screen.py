@@ -141,13 +141,7 @@ class LockScreen(QWidget):
             self.unlocked.emit()
             return
 
-        # 2. Fallback : vérifier le PIN local (registre)
-        saved = self._get_saved_pin()
-        if entered == saved:
-            user_session.set_user({"nom": "Local", "role": "admin", "voir_ca": True})
-            self._error_lbl.setText("")
-            self.unlocked.emit()
-            return
+        # Plus de fallback PIN local — tout passe par Supabase
 
         # Échec
         self._error_lbl.setText("Code PIN incorrect")

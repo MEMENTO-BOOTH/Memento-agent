@@ -295,41 +295,7 @@ class ConfigPage(QWidget):
             self._contacts.append({"email": inp_email, "tel": inp_tel})
         vl.addWidget(card_contacts)
 
-        # ── CODE PIN ──
-        vl.addWidget(_section_title("CODE PIN"))
-        card_pin = _Card()
-        pl = QVBoxLayout(card_pin)
-        pl.setContentsMargins(20, 20, 20, 20)
-        pl.setSpacing(14)
-
-        pin_desc = _label(
-            "Ce code protège l'accès à l'agent après déconnexion.",
-            muted=True, size=12
-        )
-        pl.addWidget(pin_desc)
-
-        pin_row = QHBoxLayout()
-        pin_row.setAlignment(Qt.AlignCenter)
-        pin_row.setSpacing(14)
-        self._pin_inputs = []
-        for _ in range(4):
-            inp = QLineEdit()
-            inp.setFixedSize(56, 56)
-            inp.setMaxLength(1)
-            inp.setAlignment(Qt.AlignCenter)
-            inp.setStyleSheet(f"""
-                QLineEdit {{
-                    border: 1.7px solid {BORDER}; border-radius: 12px;
-                    font-family: 'Satoshi'; font-size: 24px; font-weight: 700;
-                    color: {TEXT}; background: {BG};
-                }}
-                QLineEdit:focus {{ border: 2px solid {GREEN}; }}
-            """)
-            inp.textChanged.connect(lambda text, idx=len(self._pin_inputs): self._pin_advance(text, idx))
-            pin_row.addWidget(inp)
-            self._pin_inputs.append(inp)
-        pl.addLayout(pin_row)
-        vl.addWidget(card_pin)
+        self._pin_inputs = []  # Plus de PIN dans le setup
 
         vl.addSpacing(12)
 
@@ -367,11 +333,6 @@ class ConfigPage(QWidget):
                 self._inp_nom_lieu.setText(nom)
 
     def _finish(self):
-        pin = "".join(i.text() for i in self._pin_inputs)
-        if len(pin) < 4:
-            pin = "0000"
-
-        reg_set("pin", pin)
         reg_set("setup_done", 1)
 
         # Collecter toutes les données à envoyer
