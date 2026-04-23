@@ -27,6 +27,8 @@ _log("=== START (import phase) ===")
 try:
     from PyQt5.QtWidgets import QApplication
     from PyQt5.QtGui import QFontDatabase
+    from PyQt5.QtNetwork import QLocalServer, QLocalSocket
+    from PyQt5.QtCore import QObject, QEvent
     _log("PyQt5 imported OK")
 except Exception as e:
     _log(f"FATAL: PyQt5 import failed: {e}")
@@ -34,6 +36,8 @@ except Exception as e:
 
 from paths import ASSETS_DIR, reg_get, reg_set
 _log("paths imported OK")
+
+_SERVER_NAME = "MementoAgent_SingleInstance_v1"
 
 
 def is_first_launch():
@@ -91,6 +95,69 @@ def open_dashboard(app):
     _log("dashboard.show() done")
 
 
+def _show_from_tray(app):
+    """Affiche la fenêtre principale (PIN, dashboard ou setup)."""
+    for attr in ('_setup', '_dashboard', '_lock'):
+        w = getattr(app, attr, None)
+        if w is not None:
+            w.showNormal()
+            w.raise_()
+            w.activateWindow()
+            _log(f"_show_from_tray: showed {attr}")
+            return
+    _log("_show_from_tray: no window to show")
+
+
+def _check_single_instance(app):
+    """Retourne True si c'est la première instance, False si une autre tourne déjà."""
+    sock = QLocalSocket()
+    sock.connectToServer(_SERVER_NAME)
+    if sock.waitForConnected(500):
+        sock.write(b"show")
+        sock.flush()
+        sock.waitForBytesWritten(500)
+        sock.disconnectFromServer()
+        _log("another instance detected — sent show signal")
+        return False
+
+    QLocalServer.removeServer(_SERVER_NAME)
+    server = QLocalServer()
+    if not server.listen(_SERVER_NAME):
+        _log(f"QLocalServer listen failed: {server.errorString()}")
+        return True
+
+    def _on_new_conn():
+        conn = server.nextPendingConnection()
+        if conn is None:
+            return
+        _log("received activation from 2nd instance")
+        _show_from_tray(app)
+        conn.disconnectFromServer()
+
+    server.newConnection.connect(_on_new_conn)
+    app._server = server
+    _log("QLocalServer listening — first instance")
+    return True
+
+
+class _HideOnClose(QObject):
+    """Intercepte la croix rouge sur les fenêtres principales pour les cacher au lieu de quitter."""
+    def __init__(self, app):
+        super().__init__()
+        self._app = app
+
+    def eventFilter(self, obj, event):
+        if event.type() == QEvent.Close:
+            if getattr(self._app, '_really_quit', False):
+                return False
+            class_name = type(obj).__name__
+            if class_name in ('DashboardWindow', 'LockScreen'):
+                obj.hide()
+                event.ignore()
+                return True
+        return False
+
+
 def _install_exception_hook():
     """Installe un hook global pour que les exceptions Python
     ne tuent pas le process Qt (crash C++ silencieux)."""
@@ -141,13 +208,10 @@ def _setup_global_tray(app):
     tray_menu = QMenu()
 
     def _show_window():
-        for w in app.topLevelWidgets():
-            if hasattr(w, 'show'):
-                w.showNormal()
-                w.activateWindow()
-                return
+        _show_from_tray(app)
 
     def _quit():
+        app._really_quit = True
         if hasattr(app, '_monitor') and app._monitor and app._monitor.isRunning():
             app._monitor.stop()
             app._monitor.wait(3000)
@@ -162,7 +226,7 @@ def _setup_global_tray(app):
 
     tray.setContextMenu(tray_menu)
     tray.setToolTip("Memento Agent — Monitoring actif")
-    tray.activated.connect(lambda reason: _show_window() if reason == QSystemTrayIcon.DoubleClick else None)
+    tray.activated.connect(lambda reason: _show_window() if reason in (QSystemTrayIcon.DoubleClick, QSystemTrayIcon.Trigger) else None)
     tray.show()
 
     # Stocker tout pour éviter le garbage collection
@@ -176,7 +240,18 @@ def main():
     _install_exception_hook()
     app = QApplication(sys.argv)
     app.setQuitOnLastWindowClosed(False)  # Ne pas quitter quand toutes les fenêtres sont fermées
+    app._really_quit = False
     _log("QApplication created")
+
+    # Empêche les doubles lancements — si une instance tourne, on la réveille puis on sort
+    if not _check_single_instance(app):
+        _log("exiting — another instance is running")
+        sys.exit(0)
+
+    # Croix rouge → cacher au lieu de fermer (l'app continue dans le tray)
+    app._close_filter = _HideOnClose(app)
+    app.installEventFilter(app._close_filter)
+    _log("single-instance + close-filter installed")
 
     QFontDatabase.addApplicationFont(os.path.join(ASSETS_DIR, "Inter-Regular.ttf"))
     QFontDatabase.addApplicationFont(os.path.join(ASSETS_DIR, "Inter-SemiBold.ttf"))
@@ -203,6 +278,8 @@ def main():
         def on_setup_done():
             _log("on_setup_done called")
             app._setup.close()
+            app._setup.deleteLater()
+            app._setup = None
             # Démarrer le monitoring APRÈS le setup (le nom est enregistré)
             _start_monitoring_early(app)
             open_dashboard(app)
@@ -211,7 +288,8 @@ def main():
         app._setup.show()
         _log("setup.show() done")
     else:
-        # Toujours afficher la page PIN pour identifier l'utilisateur
+        # Démarrer caché dans le tray — monitoring tourne en fond
+        # L'utilisateur ouvre l'app via le tray ou l'icône du bureau
         from auth import LockScreen
         app._lock = LockScreen()
         screen = app.primaryScreen().availableGeometry()
@@ -227,8 +305,9 @@ def main():
             open_dashboard(app)
 
         app._lock.unlocked.connect(on_unlock)
-        app._lock.show()
-        _log("lock.show() done")
+        # Ne pas afficher la fenêtre au démarrage — rester dans le tray
+        # L'utilisateur ouvre via le tray ou l'icône du bureau
+        _log("app started hidden in tray")
 
     _log("entering app.exec_()")
     ret = app.exec_()
