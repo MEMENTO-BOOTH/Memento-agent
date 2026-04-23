@@ -28,6 +28,7 @@ class MonitoringEngine(QThread):
     alerte_created = pyqtSignal(str)
     alerte_changed = pyqtSignal()
     alerte_critique = pyqtSignal(bool)  # True = alerte critique, False = plus d'alertes
+    print_started = pyqtSignal()        # compteur DNP a baisse = impression physique
     error = pyqtSignal(str)
 
     def __init__(self, parent=None):
@@ -87,7 +88,11 @@ class MonitoringEngine(QThread):
         # Initialiser e-memento watcher + drive backup
         self._emmento = EmentoWatcher(self._borne_id)
         self._cash = CashInterfaceWatcher(self._borne_id)
-        self._printer_counter = PrinterCounterWatcher(self._borne_id, self._nom_lieu)
+        self._printer_counter = PrinterCounterWatcher(
+            self._borne_id,
+            self._nom_lieu,
+            on_print_started=lambda: self.print_started.emit(),
+        )
         drive_folder = f"{self._nom_lieu} ({borne.get('code', socket.gethostname())})"
         self._drive = DriveBackup(drive_folder, self._borne_id)
         print("[MONITORING] E-memento + CashInterface + PrinterCounter + Drive backup initialisés")

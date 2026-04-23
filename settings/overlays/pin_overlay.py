@@ -52,16 +52,16 @@ class PinOverlay(QWidget):
         cl.addLayout(header)
         cl.addSpacing(8)
 
-        subtitle = QLabel("Entrez votre nouveau code à 4 chiffres")
+        subtitle = QLabel("Entrez votre nouveau code à 6 chiffres")
         subtitle.setStyleSheet(f"color: #888888; font-family: 'Inter'; font-size: 12px; background: transparent;")
         cl.addWidget(subtitle)
         cl.addSpacing(24)
 
-        # 4 champs PIN
+        # 6 champs PIN
         pin_row = QHBoxLayout()
         pin_row.setSpacing(14)
         pin_row.addStretch()
-        for i in range(4):
+        for i in range(6):
             inp = QLineEdit()
             inp.setFixedSize(56, 56)
             inp.setMaxLength(1)
@@ -116,7 +116,7 @@ class PinOverlay(QWidget):
         layout.addWidget(card)
 
     def _on_digit(self, text, idx):
-        if text and idx < 3:
+        if text and idx < 5:
             self._pin_inputs[idx + 1].setFocus()
 
     def _close(self):
@@ -126,7 +126,7 @@ class PinOverlay(QWidget):
 
     def _confirm(self):
         pin = "".join(inp.text() for inp in self._pin_inputs)
-        if len(pin) == 4:
+        if len(pin) == 6:
             cfg = load_config()
             cfg["pin"] = pin
             save_config(cfg)

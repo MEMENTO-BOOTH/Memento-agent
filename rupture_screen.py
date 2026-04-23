@@ -155,7 +155,7 @@ class RuptureScreen(QWidget):
         inp = QLineEdit()
         inp.setEchoMode(QLineEdit.Password)
         inp.setReadOnly(True)
-        inp.setPlaceholderText("____")
+        inp.setPlaceholderText("______")
         inp.setFixedHeight(44)
         inp.setAlignment(Qt.AlignCenter)
         inp.setStyleSheet(
@@ -182,7 +182,7 @@ class RuptureScreen(QWidget):
         )
 
         def _add_digit(d):
-            if len(inp.text()) < 4:
+            if len(inp.text()) < 6:
                 inp.setText(inp.text() + d)
 
         for i, num in enumerate(["1","2","3","4","5","6","7","8","9"]):

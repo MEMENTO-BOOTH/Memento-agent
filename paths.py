@@ -6,11 +6,20 @@ import winreg
 _REG_PATH = r"Software\MementoAgent"
 
 _DEFAULTS = {
-    "setup_done":       (0,           winreg.REG_DWORD),
-    "pin":              ("0000",      winreg.REG_SZ),
-    "pin_enabled":      (0,           winreg.REG_DWORD),
-    "langue":           ("fr",        winreg.REG_SZ),
-    "theme":            ("light",     winreg.REG_SZ),
+    "setup_done":         (0,               winreg.REG_DWORD),
+    "pin":                ("0000",          winreg.REG_SZ),
+    "pin_enabled":        (0,               winreg.REG_DWORD),
+    "langue":             ("fr",            winreg.REG_SZ),
+    "theme":              ("light",         winreg.REG_SZ),
+    "overlay_enabled":    (0,               winreg.REG_DWORD),
+    "overlay_style":      ("memento",       winreg.REG_SZ),
+    "overlay_color_main": ("#B6FF56",       winreg.REG_SZ),
+    "overlay_color_text": ("#FFFFFF",       winreg.REG_SZ),
+    "overlay_color_bg":   ("#0F172A",       winreg.REG_SZ),
+    "overlay_font":       ("Satoshi",       winreg.REG_SZ),
+    "overlay_position":   ("bottom_right",  winreg.REG_SZ),
+    "overlay_duration":   (18,              winreg.REG_DWORD),
+    "overlay_glow":       (1,               winreg.REG_DWORD),
 }
 
 

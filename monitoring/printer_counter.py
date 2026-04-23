@@ -158,7 +158,7 @@ class PrinterCounterWatcher:
          - Si deadline depassee : PATCH anomalie='non_delivree' + alerte
     """
 
-    def __init__(self, borne_id, nom_lieu=None):
+    def __init__(self, borne_id, nom_lieu=None, on_print_started=None):
         self._borne_id = borne_id
         self._nom_lieu = nom_lieu or ""
         self._printer = _PrinterHandle()
@@ -166,12 +166,22 @@ class PrinterCounterWatcher:
         self._history = deque(maxlen=400)  # ~20 min a 3s
         # Memo des transactions deja resolues pour eviter logs en double
         self._resolved = set()
+        # Callback declenche quand le compteur baisse (impression physique detectee)
+        self._on_print_started = on_print_started
+
+    def set_on_print_started(self, cb):
+        self._on_print_started = cb
 
     # --- Lecture compteur & historique -------------------------------
     def _tick_counter(self):
         counter = self._printer.read_counter()
         now = datetime.now()
         if counter is not None:
+            if self._history and counter < self._history[-1][1] and self._on_print_started:
+                try:
+                    self._on_print_started()
+                except Exception as e:
+                    print(f"[PRINTER_COUNTER] on_print_started error: {e}")
             self._history.append((now, counter))
             # Nettoyage > HISTORIQUE_MAX_S
             cutoff = now - timedelta(seconds=HISTORIQUE_MAX_S)

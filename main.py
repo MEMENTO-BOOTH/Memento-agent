@@ -175,11 +175,24 @@ def _start_monitoring_early(app):
         from monitoring import MonitoringEngine
         app._monitor = MonitoringEngine()
         app._monitor.alerte_critique.connect(lambda has: _on_early_critique(has))
+        if hasattr(app, '_overlay_manager') and app._overlay_manager:
+            app._monitor.print_started.connect(app._overlay_manager.on_print_started)
         app._monitor.start()
         _log("monitoring started (before PIN)")
     except Exception as e:
         _log(f"monitoring early start failed: {e}")
         app._monitor = None
+
+
+def _setup_print_overlay(app):
+    """Instancie le PrintOverlayManager — affichage overlay lors des impressions."""
+    try:
+        from overlay import PrintOverlayManager
+        app._overlay_manager = PrintOverlayManager()
+        _log("print overlay manager created")
+    except Exception as e:
+        _log(f"print overlay init failed: {e}")
+        app._overlay_manager = None
 
 
 def _on_early_critique(has_critique):
@@ -262,6 +275,9 @@ def main():
 
     # Tray global — l'app tourne en fond même sur l'écran PIN
     _setup_global_tray(app)
+
+    # Overlay d'impression — instance globale pour recevoir les signaux du monitoring
+    _setup_print_overlay(app)
 
     first = is_first_launch()
     _log(f"is_first_launch = {first}")

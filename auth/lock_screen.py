@@ -67,11 +67,11 @@ class LockScreen(QWidget):
         container.addWidget(subtitle)
         container.addSpacing(32)
 
-        # 4 champs PIN
+        # 6 champs PIN
         pin_row = QHBoxLayout()
         pin_row.setSpacing(14)
         pin_row.setAlignment(Qt.AlignCenter)
-        for i in range(4):
+        for i in range(6):
             inp = QLineEdit()
             inp.setFixedSize(56, 56)
             inp.setMaxLength(1)
@@ -115,10 +115,10 @@ class LockScreen(QWidget):
         layout.addLayout(container)
 
     def _on_digit(self, text, idx):
-        if text and idx < 3:
+        if text and idx < 5:
             self._pin_inputs[idx + 1].setFocus()
-        # Auto-check quand 4 digits remplis
-        if idx == 3 and text:
+        # Auto-check quand 6 digits remplis
+        if idx == 5 and text:
             self._check_pin()
 
     def _check_pin(self):

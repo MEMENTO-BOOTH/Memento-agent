@@ -15,7 +15,7 @@ import supabase_client as supa
 from .config import load as load_config, save as save_config
 from .worker import ApiWorker
 from .widgets import section_title, label, separator
-from .overlays import PinOverlay, HorairesOverlay, PaletteOverlay
+from .overlays import PinOverlay, HorairesOverlay, PaletteOverlay, AnimationOverlay
 from .sections import (
     build_borne_section,
     build_imprimante_section,
@@ -25,7 +25,10 @@ from .sections import (
     build_notifications_section,
     build_apparence_section,
     build_mise_a_jour_section,
+    build_animation_section,
 )
+from overlay import config as overlay_cfg
+from overlay.presets import get as get_preset
 
 
 class SettingsWidget(QWidget):
@@ -146,6 +149,15 @@ class SettingsWidget(QWidget):
         self._ref_app = refs
         self._ref_app["combo_theme"].currentIndexChanged.connect(self._on_theme_changed)
         self._ref_app["combo_lang"].currentIndexChanged.connect(self._on_lang_changed)
+        vl.addWidget(t)
+        vl.addWidget(c)
+
+        # ── ANIMATION IMPRESSION ──
+        t, c, refs = build_animation_section()
+        self._ref_anim = refs
+        self._ref_anim["toggle"].mousePressEvent_orig = self._ref_anim["toggle"].mousePressEvent
+        self._ref_anim["toggle"].mousePressEvent = self._on_toggle_animation
+        self._ref_anim["btn_config"].clicked.connect(self._show_animation_overlay)
         vl.addWidget(t)
         vl.addWidget(c)
 
@@ -535,6 +547,43 @@ class SettingsWidget(QWidget):
         # Sauvegarder dans Supabase via printer_status_config
         # Pour l'instant on print, le branchement complet se fait quand la table est prête
         print(f"[SETTINGS] Palette sauvegardée: {data}")
+
+    # ═══════════════════════════════════════════════
+    #  ACTIONS — ANIMATION IMPRESSION
+    # ═══════════════════════════════════════════════
+
+    def _on_toggle_animation(self, event):
+        self._ref_anim["toggle"].mousePressEvent_orig(event)
+        cfg = overlay_cfg.load()
+        cfg["enabled"] = self._ref_anim["toggle"].is_on()
+        overlay_cfg.save(cfg)
+        self._notify_overlay_reload()
+
+    def _show_animation_overlay(self):
+        main_win = self.window()
+        if hasattr(self, '_anim_overlay') and self._anim_overlay:
+            self._anim_overlay.deleteLater()
+        self._anim_overlay = AnimationOverlay(main_win)
+        self._anim_overlay.set_on_saved(self._on_animation_saved)
+        self._anim_overlay.setGeometry(main_win.rect())
+        self._anim_overlay.raise_()
+        self._anim_overlay.show()
+
+    def _on_animation_saved(self, cfg):
+        self._ref_anim["toggle"].set_on(bool(cfg.get("enabled")))
+        self._ref_anim["lbl_style"].setText(get_preset(cfg.get("style", "memento"))["name"])
+        self._ref_anim["lbl_duration"].setText(f"{cfg.get('duration', 18)}s")
+        self._notify_overlay_reload()
+
+    def _notify_overlay_reload(self):
+        """Informe le PrintOverlayManager qu'il doit relire sa config."""
+        try:
+            from PyQt5.QtWidgets import QApplication
+            mgr = getattr(QApplication.instance(), "_overlay_manager", None)
+            if mgr:
+                mgr.reload_config()
+        except Exception:
+            pass
 
     # ═══════════════════════════════════════════════
     #  ACTIONS — NOTIFICATIONS (table alerte_destinataires)
