@@ -475,11 +475,13 @@ def verifier_pin(pin):
     """Vérifie un PIN dans la table utilisateurs. Retourne le dict utilisateur ou None."""
     try:
         r = requests.get(
-            _url(f"utilisateurs?pin=eq.{pin}&select=id,nom,role,voir_ca"),
+            _url(f"utilisateurs?pin=eq.{pin}&select=id,nom,is_admin,voir_ca"),
             headers=HEADERS, timeout=TIMEOUT,
         )
         if r.status_code == 200 and r.json():
-            return r.json()[0]
+            user = r.json()[0]
+            user["role"] = "admin" if user.get("is_admin") else "technicien"
+            return user
     except Exception:
         pass
     return None
