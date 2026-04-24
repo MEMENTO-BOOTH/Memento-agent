@@ -189,6 +189,11 @@ class PrinterCounterWatcher:
                 self._history.popleft()
         return counter
 
+    def tick_counter_only(self):
+        """Poll rapide du compteur uniquement (pour overlay reactif).
+        N'effectue aucun appel Supabase, ne fait que detecter la baisse."""
+        self._tick_counter()
+
     def _counter_at(self, ts_utc):
         """Retourne le compteur connu au plus proche (avant ou egal) de ts_utc.
         None si historique ne remonte pas assez loin."""

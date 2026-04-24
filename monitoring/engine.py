@@ -91,7 +91,6 @@ class MonitoringEngine(QThread):
         self._printer_counter = PrinterCounterWatcher(
             self._borne_id,
             self._nom_lieu,
-            on_print_started=lambda: self.print_started.emit(),
         )
         drive_folder = f"{self._nom_lieu} ({borne.get('code', socket.gethostname())})"
         self._drive = DriveBackup(drive_folder, self._borne_id)

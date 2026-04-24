@@ -31,6 +31,13 @@ class OverlayWindow(QWidget):
         bar.show()
         self._relayout(cfg.get("position", "bottom_right"))
 
+    def mark_current_done(self):
+        """Marque la barre non-terminee la plus ancienne comme finie (papier sorti)."""
+        for bar in self._bars:
+            if bar._done_at is None:
+                bar.mark_done()
+                return
+
     def _remove_bar(self, bar):
         if bar in self._bars:
             self._bars.remove(bar)

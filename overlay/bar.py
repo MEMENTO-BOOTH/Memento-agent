@@ -10,7 +10,7 @@ from .presets import get as get_preset
 
 BAR_W = 340
 BAR_H = 50
-DONE_DISPLAY_S = 3
+DONE_DISPLAY_S = 1
 TICK_MS = 30
 
 
@@ -34,6 +34,12 @@ class PrintBar(QWidget):
             return 1.0
         p = (time.time() - self._start) / self._duration
         return max(0.0, min(1.0, p))
+
+    def mark_done(self):
+        """Force la barre a passer immediatement en etat 'termine'."""
+        if self._done_at is None:
+            self._done_at = time.time()
+            self.update()
 
     def _tick(self):
         if self._done_at is None and self.progress() >= 1.0:
