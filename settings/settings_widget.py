@@ -276,17 +276,19 @@ class SettingsWidget(QWidget):
     def _on_heartbeat_loaded(self, data):
         if not data:
             return
-        # Nom de l'imprimante depuis les données locales du monitoring
-        from monitoring.collectors.printer import lire_imprimante
-        try:
-            imp = lire_imprimante()
-            self._ref_imp["lbl_nom"].setText(imp.get("nom_imprimante") or "—")
-        except Exception:
-            self._ref_imp["lbl_nom"].setText("—")
+        # Recuperer le nom de l'imprimante en arriere-plan (peut hanger sur DLL DNP)
+        self._ref_imp["lbl_nom"].setText("—")
+        from monitoring.collectors.heartbeat import _lire_imprimante_safe
+        self._run(_lire_imprimante_safe, self._on_imprimante_loaded)
         self._ref_imp["lbl_serial"].setText(data.get("serial_imprimante") or "—")
         self._ref_imp["lbl_statut"].setText(data.get("imprimante_statut") or "—")
         coupe_on = data.get("mode_coupe") == "Coupe activée"
         self._ref_imp["toggle_coupe"].set_on(coupe_on)
+
+    def _on_imprimante_loaded(self, imp):
+        if not imp:
+            return
+        self._ref_imp["lbl_nom"].setText(imp.get("nom_imprimante") or "—")
 
         # Version agent — toujours afficher la version locale
         from version import VERSION

@@ -1,6 +1,7 @@
 """Heartbeat — collecte et envoie les données à Supabase (UPSERT).
 Remplace remontee_finale_1.0.0.pyw."""
 
+import concurrent.futures
 from datetime import datetime
 import requests
 import supabase_client as supa
@@ -8,11 +9,42 @@ from .printer import lire_imprimante
 from .system import lire_processus, lire_wifi, lire_wifi_signal, lire_disque, lire_appareil_photo, lire_versions
 
 
+# Executeur dedie : 1 thread reutilise pour toutes les lectures imprimante.
+# Si la DLL hang (port DNP injoignable), on ne spawn pas de nouveaux threads :
+# les appels suivants verront que le precedent n'a pas fini et retourneront les valeurs par defaut.
+_PRINTER_EXEC = concurrent.futures.ThreadPoolExecutor(max_workers=1, thread_name_prefix="printer-reader")
+_PRINTER_PENDING = [None]
+_PRINTER_TIMEOUT_S = 5.0
+_PRINTER_DEFAULT = {
+    "nom_imprimante": None,
+    "serial_imprimante": None,
+    "imprimante_statut": "Indisponible",
+    "imprimante_statut_code": None,
+    "feuilles_restantes": None,
+    "mode_coupe": None,
+}
+
+
+def _lire_imprimante_safe():
+    """Lecture imprimante protegee par timeout + un seul thread en parallele."""
+    f = _PRINTER_PENDING[0]
+    if f is not None and not f.done():
+        return _PRINTER_DEFAULT.copy()
+    new_f = _PRINTER_EXEC.submit(lire_imprimante)
+    _PRINTER_PENDING[0] = new_f
+    try:
+        return new_f.result(timeout=_PRINTER_TIMEOUT_S)
+    except concurrent.futures.TimeoutError:
+        return _PRINTER_DEFAULT.copy()
+    except Exception:
+        return _PRINTER_DEFAULT.copy()
+
+
 def collecter_donnees():
     """Collecte toutes les données de la borne."""
-    _log_hb("collect: lire_imprimante...")
-    imprimante = lire_imprimante()
-    _log_hb(f"collect: lire_imprimante OK statut={imprimante.get('imprimante_statut')} feuilles={imprimante.get('feuilles_restantes')}")
+    _log_hb("collect: lire_imprimante (safe)...")
+    imprimante = _lire_imprimante_safe()
+    _log_hb(f"collect: lire_imprimante done statut={imprimante.get('imprimante_statut')} feuilles={imprimante.get('feuilles_restantes')}")
     _log_hb("collect: lire_processus...")
     processus = lire_processus()
     _log_hb("collect: lire_appareil_photo...")
