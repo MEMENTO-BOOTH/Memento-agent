@@ -60,8 +60,8 @@ class MonitoringEngine(QThread):
             except Exception:
                 time.sleep(2)
 
-        # Identifier la borne
-        borne = supa.get_borne()
+        # Identifier la borne — la creer si absente (resilience apres migration ou setup en panne reseau)
+        borne = supa.get_or_create_borne()
         if not borne:
             self.error.emit("Impossible d'identifier la borne")
             return
