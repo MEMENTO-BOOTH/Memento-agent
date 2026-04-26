@@ -17,6 +17,13 @@ class PrintOverlayManager(QObject):
         self._window = None
         self._cfg = cfg_mod.load()
         self._last_start = 0.0
+        self._detector = None
+        if self._cfg.get("enabled"):
+            self._ensure_detector()
+
+    def _ensure_detector(self):
+        if self._detector is not None:
+            return
         self._detector = PrintStartDetector(
             on_print_started=self._on_start_signal,
             on_print_completed=self._on_done_signal,
@@ -26,6 +33,8 @@ class PrintOverlayManager(QObject):
 
     def reload_config(self):
         self._cfg = cfg_mod.load()
+        if self._cfg.get("enabled"):
+            self._ensure_detector()
 
     def _on_start_signal(self):
         self.on_print_started()
