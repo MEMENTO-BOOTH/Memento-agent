@@ -90,9 +90,21 @@ class PrintStartDetector(QObject):
         if not HAS_WIN32PRINT:
             _log("win32print unavailable")
             return
+        # 1) Tentative par noms connus (rapide, pas de scan reseau)
+        for name in ("DP-DS620 (Copie 1)", "DP-DS620 (Copy 1)", "DP-DS620"):
+            try:
+                h = win32print.OpenPrinter(name)
+                jobs = win32print.EnumJobs(h, 0, 200, 1)
+                self._printer_handle = h
+                self._printer_name = name
+                self._known_jobs = {j["JobId"] for j in jobs}
+                _log(f"spool open by name {name} jobs={sorted(self._known_jobs)}")
+                return
+            except Exception:
+                continue
+        # 2) Fallback : enumeration LOCAL seulement (PRINTER_ENUM_CONNECTIONS peut hanger sur reseau)
         try:
-            flags = win32print.PRINTER_ENUM_LOCAL | win32print.PRINTER_ENUM_CONNECTIONS
-            for pinfo in win32print.EnumPrinters(flags):
+            for pinfo in win32print.EnumPrinters(win32print.PRINTER_ENUM_LOCAL):
                 name = pinfo[2]
                 if not _is_ds620(name):
                     continue
@@ -102,7 +114,7 @@ class PrintStartDetector(QObject):
                     self._printer_handle = h
                     self._printer_name = name
                     self._known_jobs = {j["JobId"] for j in jobs}
-                    _log(f"spool open {name} jobs={sorted(self._known_jobs)}")
+                    _log(f"spool open by enum {name} jobs={sorted(self._known_jobs)}")
                     return
                 except Exception as e:
                     _log(f"spool open error {name}: {e}")
