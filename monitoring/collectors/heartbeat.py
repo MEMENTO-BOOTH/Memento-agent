@@ -10,15 +10,16 @@ from .system import lire_processus, lire_wifi, lire_wifi_signal, lire_disque, li
 
 
 # Executeur dedie : 1 thread reutilise pour toutes les lectures imprimante.
-# Si la DLL hang (port DNP injoignable), on ne spawn pas de nouveaux threads :
-# les appels suivants verront que le precedent n'a pas fini et retourneront les valeurs par defaut.
+# Si la DLL hang, on retourne le cache du dernier resultat valide
+# pour eviter de faire passer une imprimante operationnelle pour deconnectee.
 _PRINTER_EXEC = concurrent.futures.ThreadPoolExecutor(max_workers=1, thread_name_prefix="printer-reader")
 _PRINTER_PENDING = [None]
-_PRINTER_TIMEOUT_S = 5.0
-_PRINTER_DEFAULT = {
+_PRINTER_TIMEOUT_S = 8.0
+_PRINTER_LAST_OK = [None]
+_PRINTER_NULL = {
     "nom_imprimante": None,
     "serial_imprimante": None,
-    "imprimante_statut": "Indisponible",
+    "imprimante_statut": None,
     "imprimante_statut_code": None,
     "feuilles_restantes": None,
     "mode_coupe": None,
@@ -26,18 +27,21 @@ _PRINTER_DEFAULT = {
 
 
 def _lire_imprimante_safe():
-    """Lecture imprimante protegee par timeout + un seul thread en parallele."""
+    """Lecture imprimante protegee par timeout. Si la DLL hang, on retourne le
+    dernier resultat connu pour ne pas declencher de fausses alertes."""
     f = _PRINTER_PENDING[0]
     if f is not None and not f.done():
-        return _PRINTER_DEFAULT.copy()
+        return _PRINTER_LAST_OK[0] or _PRINTER_NULL.copy()
     new_f = _PRINTER_EXEC.submit(lire_imprimante)
     _PRINTER_PENDING[0] = new_f
     try:
-        return new_f.result(timeout=_PRINTER_TIMEOUT_S)
+        result = new_f.result(timeout=_PRINTER_TIMEOUT_S)
+        _PRINTER_LAST_OK[0] = result
+        return result
     except concurrent.futures.TimeoutError:
-        return _PRINTER_DEFAULT.copy()
+        return _PRINTER_LAST_OK[0] or _PRINTER_NULL.copy()
     except Exception:
-        return _PRINTER_DEFAULT.copy()
+        return _PRINTER_LAST_OK[0] or _PRINTER_NULL.copy()
 
 
 def collecter_donnees():

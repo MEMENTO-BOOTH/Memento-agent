@@ -243,12 +243,19 @@ def verifier_alertes(borne_id, nom_lieu, donnees):
     # 0. IMPRIMANTE DÉCONNECTÉE
     # ══════════════════════════════════════════════
 
-    imprimante_statut = donnees.get("imprimante_statut", "")
-    if status is None or status == 0x80000000 or imprimante_statut in ("Imprimante déconnectée", "Imprimante non trouvée", "DLL introuvable"):
+    imprimante_statut = donnees.get("imprimante_statut") or ""
+    deconnecte = (
+        status == 0x80000000
+        or imprimante_statut in ("Imprimante déconnectée", "Imprimante non trouvée", "DLL introuvable")
+    )
+    # status=None et statut="" ou None : lecture pas encore faite ou DLL en hang.
+    # On NE declenche PAS d'alerte dans ce cas (eviterait les fausses alertes).
+    if deconnecte:
         if not _alerte_deja_ouverte(borne_id, "imprimante_deconnectee"):
             _creer_alerte(borne_id, "imprimante_deconnectee", "imprimante",
                           f"Imprimante déconnectée sur {bar}.", "critique")
-    else:
+    elif status is not None and imprimante_statut:
+        # Statut clairement OK : on resout d'eventuelles alertes ouvertes
         _resoudre_alertes(borne_id, ["imprimante_deconnectee"])
 
     # ══════════════════════════════════════════════

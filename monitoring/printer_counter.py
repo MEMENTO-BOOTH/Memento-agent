@@ -276,10 +276,6 @@ class PrinterCounterWatcher:
         """Appele toutes les 3 s par MonitoringEngine."""
         counter_now = self._tick_counter()
 
-        # Si DLL injoignable, on ne peut rien faire de plus
-        if counter_now is None:
-            return
-
         pending = self._fetch_pending_transactions()
         if not pending:
             return
@@ -300,43 +296,44 @@ class PrinterCounterWatcher:
             except ValueError:
                 continue
 
-            # Snapshot feuilles_avant si pas deja fait
-            feuilles_avant = tx.get("feuilles_avant")
-            if feuilles_avant is None:
-                ref = self._counter_at(paiement_at)
-                if ref is None:
-                    # Historique ne remonte pas jusqu'au paiement, on prend le compteur actuel
-                    # (moins precis mais evite de perdre le flag)
-                    ref = counter_now
-                self._patch(tx_id, {"feuilles_avant": ref})
-                feuilles_avant = ref
-
-            # Verification : le compteur a-t-il decru ?
-            baisse = feuilles_avant - counter_now
-
-            if baisse >= 1:
-                # Papier sorti
-                anomalie = None
-                if baisse >= 2:
-                    anomalie = "multiple"
-                self._patch(tx_id, {
-                    "feuilles_apres": counter_now,
-                    "impression_verifiee_papier": True,
-                    "impression_declenchee": True,
-                    "anomalie_impression": anomalie,
-                })
-                self._resolved.add(tx_id)
-                import activity_logger as alog
-                alog.log_tpe_confirmation(tx_id)
-                print(
-                    f"[PRINTER_COUNTER] Impression verifiee {tx_id[:8]} "
-                    f"({feuilles_avant}->{counter_now})"
-                    + (" [MULTIPLE]" if anomalie == "multiple" else "")
-                )
-                continue
-
-            # Deadline depassee sans baisse
             ecart = (now_utc - paiement_at).total_seconds()
+
+            # ─── Compteur lisible : verification standard ───
+            if counter_now is not None:
+                # Snapshot feuilles_avant si pas deja fait
+                feuilles_avant = tx.get("feuilles_avant")
+                if feuilles_avant is None:
+                    ref = self._counter_at(paiement_at)
+                    if ref is None:
+                        ref = counter_now
+                    self._patch(tx_id, {"feuilles_avant": ref})
+                    feuilles_avant = ref
+
+                baisse = feuilles_avant - counter_now
+
+                if baisse >= 1:
+                    anomalie = None
+                    if baisse >= 2:
+                        anomalie = "multiple"
+                    self._patch(tx_id, {
+                        "feuilles_apres": counter_now,
+                        "impression_verifiee_papier": True,
+                        "impression_declenchee": True,
+                        "anomalie_impression": anomalie,
+                    })
+                    self._resolved.add(tx_id)
+                    import activity_logger as alog
+                    alog.log_tpe_confirmation(tx_id)
+                    print(
+                        f"[PRINTER_COUNTER] Impression verifiee {tx_id[:8]} "
+                        f"({feuilles_avant}->{counter_now})"
+                        + (" [MULTIPLE]" if anomalie == "multiple" else "")
+                    )
+                    continue
+
+            # ─── Deadline depassee : anomalie 'non_delivree' ───
+            # Declenche meme quand le compteur est illisible (DLL en erreur).
+            # Sans compteur on ne peut pas confirmer l'impression : on assume non delivree.
             if ecart > FENETRE_VERIFICATION_S:
                 self._patch(tx_id, {
                     "feuilles_apres": counter_now,
