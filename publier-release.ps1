@@ -17,7 +17,8 @@
 
 [CmdletBinding()]
 param(
-    [string]$Notes = ""
+    [string]$Notes = "",
+    [switch]$Force
 )
 
 $ErrorActionPreference = "Stop"
@@ -40,10 +41,14 @@ $dirty = git status --porcelain
 if ($dirty) {
     Write-Warning "Le working tree n'est pas propre :"
     git status --short
-    $confirm = Read-Host "Continuer quand meme ? (o/N)"
-    if ($confirm -ne "o" -and $confirm -ne "O") {
-        Write-Host "Abandon."
-        exit 1
+    if ($Force) {
+        Write-Host "(-Force : on continue malgre tout)"
+    } else {
+        $confirm = Read-Host "Continuer quand meme ? (o/N)"
+        if ($confirm -ne "o" -and $confirm -ne "O") {
+            Write-Host "Abandon."
+            exit 1
+        }
     }
 }
 
@@ -84,10 +89,14 @@ Write-Host "  Type    : $channel"
 Write-Host "  Asset   : $setupPath"
 if ($Notes) { Write-Host "  Notes   : $Notes" }
 Write-Host ""
-$confirm = Read-Host "Publier ? (o/N)"
-if ($confirm -ne "o" -and $confirm -ne "O") {
-    Write-Host "Abandon."
-    exit 0
+if ($Force) {
+    Write-Host "(-Force : publication sans confirmation)"
+} else {
+    $confirm = Read-Host "Publier ? (o/N)"
+    if ($confirm -ne "o" -and $confirm -ne "O") {
+        Write-Host "Abandon."
+        exit 0
+    }
 }
 
 # 5. Tag git
@@ -119,7 +128,7 @@ if ($prerelease) {
 & gh @ghArgs
 
 if ($LASTEXITCODE -ne 0) {
-    Write-Error "gh release create a echoue. Le tag $tag a ete cree et pushe — supprime-le si tu veux retenter (gh release delete $tag --yes; git push origin --delete $tag)."
+    Write-Error "gh release create a echoue. Le tag $tag a ete cree et pushe - supprime-le si tu veux retenter."
     exit 1
 }
 
