@@ -39,7 +39,7 @@ jobs:
       - name: Lire la version depuis version.py
         shell: bash
         run: |
-          VERSION=$(grep -oP 'VERSION\s*=\s*"\K[^"]+' version.py)
+          VERSION=$(awk -F'"' '/^VERSION[[:space:]]*=/ {print $2; exit}' version.py)
           if [ -z "$VERSION" ]; then
             echo "ERREUR: impossible de lire VERSION dans version.py"
             exit 1
