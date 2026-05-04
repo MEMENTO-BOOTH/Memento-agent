@@ -87,15 +87,20 @@ jobs:
           # un stub vide est suffisant : la borne le remplit au 1er lancement via le setup wizard
           touch .env
 
-      - name: Installer Inno Setup
+      - name: Localiser Inno Setup (deja preinstalle sur windows-latest)
         shell: pwsh
         run: |
-          choco install innosetup --version=6.2.2 -y --no-progress
           $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
           if (-not (Test-Path $iscc)) {
-            Write-Error "ISCC.exe introuvable apres installation"
+            Write-Host "ISCC.exe absent, installation via chocolatey..."
+            choco install innosetup -y --no-progress
+          }
+          if (-not (Test-Path $iscc)) {
+            Write-Error "ISCC.exe introuvable a $iscc apres tentative d'installation"
             exit 1
           }
+          $version = & $iscc /? 2>&1 | Select-String -Pattern "Inno Setup" | Select-Object -First 1
+          Write-Host "Inno Setup detecte: $version"
           echo "ISCC=$iscc" >> $env:GITHUB_ENV
 
       - name: Build de l'installeur Inno Setup
