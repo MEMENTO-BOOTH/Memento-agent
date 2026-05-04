@@ -77,89 +77,71 @@ SUPABASE_URL=https://votre-projet.supabase.co
 SUPABASE_KEY=votre-cle-supabase
 ```
 
-## Compilation locale (pour tester)
+## Compilation
 
-```bash
+```powershell
 python -m PyInstaller MementoAgent.spec --clean --noconfirm
-"C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer.iss
+& "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer.iss
 ```
 
-Le setup est genere dans `installer_output/MementoAgent_Setup_<version>.exe`.
-
-> En production, on **ne builde pas a la main** : le workflow GitHub Actions s'en charge (voir section suivante).
+Le setup est genere dans `installer_output\MementoAgent_Setup_<version>.exe`. La version dans [installer.iss](installer.iss) est lue automatiquement depuis [version.py](version.py) via le preprocesseur Inno Setup — pas besoin de la modifier.
 
 ## Publier une mise a jour
 
-Tout passe par GitHub Releases. Le workflow [.github/workflows/release.yml](.github/workflows/release.yml) build et publie automatiquement, et **le type de release (prerelease ou release) est decide selon la branche** depuis laquelle le workflow est lance.
+Le build se fait **localement** (PyInstaller + Inno Setup). La publication sur GitHub Releases (avec le bon flag prerelease/release selon la branche) est automatisee par le script [publier-release.ps1](publier-release.ps1).
 
-### Pre-requis avant chaque release
+### Pre-requis
 
-1. Bump la version dans [version.py](version.py) (le workflow refuse si le tag `v<version>` existe deja).
+1. Bump la version dans [version.py](version.py).
 2. Commit et push le bump sur la branche cible (`dev` ou `prod`).
-
-> [version.py](version.py) est la **seule source de verite** pour la version. [installer.iss](installer.iss) lit la valeur via le preprocesseur Inno Setup, pas besoin de la toucher.
+3. Compiler en local (voir section *Compilation* ci-dessus).
+4. Verifier que `installer_output\MementoAgent_Setup_<version>.exe` existe.
 
 ### Publier une PRE-RELEASE (canal dev)
 
-Depuis la branche `dev`. Deux options :
+Depuis la branche `dev` :
 
-**Option A — via l'interface GitHub :**
-
-1. Aller dans l'onglet **Actions** du repo
-2. Cliquer sur le workflow **Build et release Memento Agent**
-3. Cliquer sur **Run workflow**, choisir la branche `dev`
-4. (Optionnel) Remplir le champ *Notes de version*
-5. Cliquer sur **Run workflow**
-
-**Option B — via la CLI `gh` :**
-
-```bash
+```powershell
 git checkout dev
 git pull
-gh workflow run release.yml --ref dev -f notes="Description des changements"
+# (... bump version.py, commit, push, compile ...)
+.\publier-release.ps1 -Notes "Description des changements"
 ```
 
-Resultat : tag `v<version>` cree sur `dev`, asset `MementoAgent_Setup_<version>.exe` attache, **prerelease = true**.
+Resultat : tag `v<version>` cree sur `dev`, installeur attache, **prerelease = true** (badge "Pre-release" sur GitHub).
 
 ### Publier une RELEASE (canal prod)
 
-Depuis la branche `prod`. Generalement on merge `dev` -> `prod` puis on declenche.
+Depuis la branche `prod`. En general on merge `dev` -> `prod` apres validation des pre-releases :
 
-**Option A — via l'interface GitHub :**
-
-1. Onglet **Actions** -> **Build et release Memento Agent**
-2. **Run workflow**, choisir la branche `prod`
-3. (Optionnel) Notes de version
-4. **Run workflow**
-
-**Option B — via la CLI `gh` :**
-
-```bash
+```powershell
 git checkout prod
 git merge dev          # ou cherry-pick les commits voulus
 git push
-gh workflow run release.yml --ref prod -f notes="Description des changements"
+# (... compile ...)
+.\publier-release.ps1 -Notes "Description des changements"
 ```
 
-Resultat : tag `v<version>` cree sur `prod`, asset attache, **prerelease = false** -> visible par toutes les bornes prod a leur prochaine verification (toutes les 6 heures).
+Resultat : tag `v<version>` cree sur `prod`, installeur attache, **prerelease = false** -> badge "Latest", visible par toutes les bornes prod a leur prochaine verification (toutes les 6 heures).
 
-### Ce que fait le workflow
+### Ce que fait le script
 
-1. Verifie qu'il tourne bien depuis `dev` ou `prod` (rejette les autres branches)
-2. Lit la version dans `version.py`, refuse si le tag existe deja
-3. Build le `.exe` avec PyInstaller + `MementoAgent.spec`
-4. Build l'installeur Inno Setup -> `installer_output/MementoAgent_Setup_<version>.exe` (la version est lue par le preprocesseur Inno Setup directement dans `version.py`)
-5. Cree le tag `v<version>` sur la branche et le push
-6. Cree la release GitHub avec l'installeur en piece jointe (`--prerelease` si lance depuis `dev`)
+1. Verifie qu'on est sur `dev` ou `prod` (rejette les autres branches)
+2. Verifie que le working tree est propre (warning sinon, demande confirmation)
+3. Lit la version dans `version.py`
+4. Verifie que le tag `v<version>` n'existe pas deja sur origin
+5. Verifie que `installer_output\MementoAgent_Setup_<version>.exe` est present
+6. Affiche un recap et demande confirmation avant de publier
+7. Cree le tag git, le push
+8. Cree la release GitHub avec l'installeur en piece jointe (`--prerelease` si lance depuis `dev`)
 
 ### Verifier que ca a marche
 
-- Onglet **Actions** : le workflow doit etre en "success"
-- Onglet **Releases** :
+- Onglet **Releases** sur GitHub :
   - Depuis `dev` -> badge **Pre-release** sur la release
-  - Depuis `prod` -> badge **Latest** (release normale)
+  - Depuis `prod` -> badge **Latest**
 - L'asset attache doit etre `MementoAgent_Setup_<version>.exe`
-- Sur une borne prod : le bouton "Verifier" dans Parametres -> Mise a jour doit detecter la nouvelle version (uniquement pour les release prod, pas les pre-releases)
+- Sur une borne prod : *Parametres -> Mise a jour -> Verifier* doit detecter la nouvelle version (uniquement pour les releases prod, pas les pre-releases)
 
 ## Base de donnees
 
@@ -216,8 +198,7 @@ settings/                   Page Parametres
 setup/                      Premier lancement (configuration initiale)
 assets/                     Icones Feather, polices Satoshi, images
 
-.github/workflows/
-  release.yml               Build PyInstaller + Inno Setup + publication GitHub Release/Pre-release
+publier-release.ps1         Script de publication d'une release/pre-release sur GitHub
 ```
 
 ## Licence

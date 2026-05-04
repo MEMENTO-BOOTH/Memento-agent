@@ -3,7 +3,7 @@
 
 a = Analysis(
     ['main.py'],
-    pathex=[SPECPATH],
+    pathex=[],
     binaries=[],
     datas=[
         ('assets', 'assets'),
@@ -35,24 +35,6 @@ a = Analysis(
     noarchive=False,
     optimize=0,
 )
-
-# Workaround pour PyInstaller 6.x : les hiddenimports listant des .py top-level
-# (dashboard.py, TPE.py, etc.) sont parfois ignores. On les ajoute manuellement
-# a a.pure pour forcer leur inclusion dans le PYZ.
-import os
-_TOP_LEVEL_MODULES = [
-    'dashboard', 'TPE', 'ui_components', 'activity_logger', 'user_session',
-    'touch_scroll', 'rupture_screen', 'version', 'supabase_client',
-]
-_existing = {name for name, _, _ in a.pure}
-for _mod in _TOP_LEVEL_MODULES:
-    if _mod in _existing:
-        continue
-    _py = os.path.join(SPECPATH, _mod + '.py')
-    if os.path.isfile(_py):
-        a.pure.append((_mod, _py, 'PYMODULE'))
-        print(f'[spec] force-include {_mod} from {_py}')
-
 pyz = PYZ(a.pure)
 
 exe = EXE(
@@ -65,8 +47,18 @@ exe = EXE(
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
-    upx=False,
-    upx_exclude=[],
+    upx=True,
+    upx_exclude=[
+        'Qt5Core.dll',
+        'Qt5Gui.dll',
+        'Qt5Widgets.dll',
+        'Qt5Svg.dll',
+        'Qt5Network.dll',
+        'Qt5DBus.dll',
+        'Qt5WebSockets.dll',
+        'Qt5Quick.dll',
+        'Qt5Qml.dll',
+    ],
     runtime_tmpdir=None,
     console=False,
     disable_windowed_traceback=False,
