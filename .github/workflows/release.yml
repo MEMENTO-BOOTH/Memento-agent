@@ -74,7 +74,7 @@ jobs:
       - name: Build du .exe avec PyInstaller
         shell: bash
         run: |
-          pyinstaller --clean --noconfirm MementoAgent.spec
+          pyinstaller --clean --noconfirm --log-level=INFO MementoAgent.spec
           if [ ! -f "dist/MementoAgent.exe" ]; then
             echo "ERREUR: dist/MementoAgent.exe introuvable apres le build PyInstaller"
             ls -la dist/ || true
@@ -82,6 +82,30 @@ jobs:
           fi
           SIZE=$(stat -c%s "dist/MementoAgent.exe")
           echo "Build PyInstaller OK: dist/MementoAgent.exe ($SIZE octets)"
+
+      - name: DEBUG - warnings PyInstaller et contenu du bundle
+        shell: bash
+        run: |
+          echo "===== warn-MementoAgent.txt ====="
+          cat build/MementoAgent/warn-MementoAgent.txt 2>/dev/null || echo "(absent)"
+          echo ""
+          echo "===== Liste des modules dans le PYZ (recherche dashboard) ====="
+          python -c "
+          from PyInstaller.archive.readers import ZlibArchiveReader, CArchiveReader
+          import sys
+          try:
+              ar = CArchiveReader('dist/MementoAgent.exe')
+              names = [t[0] for t in ar.toc.data]
+              print(f'CArchive contient {len(names)} entrees')
+              dash = [n for n in names if 'dashboard' in n.lower()]
+              print(f'Entrees contenant \"dashboard\": {dash}')
+              # Chercher PYZ-00.pyz
+              pyz_entries = [t for t in ar.toc.data if t[0].endswith('.pyz')]
+              for pe in pyz_entries:
+                  print(f'PYZ trouve: {pe[0]}')
+          except Exception as e:
+              print(f'Erreur lecture archive: {e}')
+          "
 
       - name: Creer un .env vide pour Inno Setup
         shell: bash
