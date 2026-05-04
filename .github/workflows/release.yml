@@ -1,129 +1,149 @@
-name: Mise a jour Supabase apres release
+name: Build et release Memento Agent
 
 on:
-  release:
-    types: [published]
+  workflow_dispatch:
+    inputs:
+      notes:
+        description: "Notes de version (markdown)"
+        required: false
+        default: ""
 
 jobs:
-  update-supabase:
-    runs-on: ubuntu-latest
+  build-and-release:
+    runs-on: windows-latest
+    permissions:
+      contents: write
+
     steps:
-      - name: Recuperer les infos de la release
-        id: release_info
+      - name: Verifier la branche (dev ou prod uniquement)
+        shell: bash
         run: |
-          VERSION="${{ github.event.release.tag_name }}"
-          VERSION="${VERSION#v}"
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
-
-          ASSETS_JSON='${{ toJSON(github.event.release.assets) }}'
-          # Utiliser l'URL API de l'asset (pas browser_download_url qui 404 sur repo prive)
-          ASSET_API_URL=$(echo "$ASSETS_JSON" | jq -r '.[] | select(.name | endswith(".exe")) | .url' | head -1)
-          EXE_NAME=$(echo "$ASSETS_JSON" | jq -r '.[] | select(.name | endswith(".exe")) | .name' | head -1)
-
-          if [ -z "$ASSET_API_URL" ] || [ "$ASSET_API_URL" = "null" ]; then
-            echo "Aucun fichier .exe trouve dans la release"
+          BRANCH="${GITHUB_REF#refs/heads/}"
+          echo "Branche source: $BRANCH"
+          if [ "$BRANCH" != "dev" ] && [ "$BRANCH" != "prod" ]; then
+            echo "ERREUR: ce workflow ne peut etre lance que depuis 'dev' ou 'prod' (branche actuelle: $BRANCH)"
             exit 1
           fi
-
-          echo "asset_api_url=$ASSET_API_URL" >> $GITHUB_OUTPUT
-          echo "exe_name=$EXE_NAME" >> $GITHUB_OUTPUT
-          echo "Fichier: $EXE_NAME"
-          echo "API URL: $ASSET_API_URL"
-
-      - name: Telecharger le exe depuis GitHub API
-        run: |
-          curl -L \
-            -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
-            -H "Accept: application/octet-stream" \
-            -o /tmp/${{ steps.release_info.outputs.exe_name }} \
-            "${{ steps.release_info.outputs.asset_api_url }}"
-
-          SIZE=$(stat -c%s "/tmp/${{ steps.release_info.outputs.exe_name }}")
-          echo "Telecharge: $SIZE octets"
-
-          if [ "$SIZE" -lt 1000 ]; then
-            echo "ERREUR: fichier trop petit ($SIZE octets), le telechargement a echoue"
-            cat /tmp/${{ steps.release_info.outputs.exe_name }}
-            exit 1
-          fi
-
-      - name: Uploader dans Supabase Storage
-        run: |
-          EXE_NAME="${{ steps.release_info.outputs.exe_name }}"
-
-          HTTP_CODE=$(curl -s -o /tmp/upload_response.txt -w "%{http_code}" \
-            -X POST "${{ secrets.SUPABASE_URL }}/storage/v1/object/updates/$EXE_NAME" \
-            -H "apikey: ${{ secrets.SUPABASE_KEY }}" \
-            -H "Authorization: Bearer ${{ secrets.SUPABASE_KEY }}" \
-            -H "Content-Type: application/octet-stream" \
-            -H "x-upsert: true" \
-            --data-binary @/tmp/$EXE_NAME)
-
-          echo "Upload HTTP: $HTTP_CODE"
-
-          if [ "$HTTP_CODE" -lt 200 ] || [ "$HTTP_CODE" -ge 300 ]; then
-            echo "Erreur upload Supabase Storage"
-            cat /tmp/upload_response.txt
-            exit 1
-          fi
-
-          echo "Upload OK dans Supabase Storage"
-
-      - name: Mettre a jour la table updates
-        run: |
-          VERSION="${{ steps.release_info.outputs.version }}"
-          EXE_NAME="${{ steps.release_info.outputs.exe_name }}"
-          STORAGE_URL="${{ secrets.SUPABASE_URL }}/storage/v1/object/public/updates/$EXE_NAME"
-          NOTES=$(echo '${{ github.event.release.body }}' | head -c 500)
-
-          JSON_BODY=$(jq -n \
-            --arg version "$VERSION" \
-            --arg fichier_url "$STORAGE_URL" \
-            --arg notes "$NOTES" \
-            '{version: $version, fichier_url: $fichier_url, notes: $notes, publiee_at: (now | todate)}')
-
-          HTTP_CODE=$(curl -s -o /tmp/response.json -w "%{http_code}" \
-            -X POST "${{ secrets.SUPABASE_URL }}/rest/v1/updates" \
-            -H "apikey: ${{ secrets.SUPABASE_KEY }}" \
-            -H "Authorization: Bearer ${{ secrets.SUPABASE_KEY }}" \
-            -H "Content-Type: application/json" \
-            -H "Prefer: resolution=merge-duplicates,return=representation" \
-            -d "$JSON_BODY")
-
-          if [ "$HTTP_CODE" -ge 200 ] && [ "$HTTP_CODE" -lt 300 ]; then
-            echo "Table updates OK: v$VERSION -> $STORAGE_URL"
+          if [ "$BRANCH" = "dev" ]; then
+            echo "prerelease=true" >> $GITHUB_ENV
+            echo "channel=dev (pre-release)" >> $GITHUB_STEP_SUMMARY
           else
-            echo "Erreur Supabase table updates (code $HTTP_CODE)"
-            cat /tmp/response.json
+            echo "prerelease=false" >> $GITHUB_ENV
+            echo "channel=prod (release)" >> $GITHUB_STEP_SUMMARY
+          fi
+          echo "branch=$BRANCH" >> $GITHUB_ENV
+
+      - name: Checkout du code
+        uses: actions/checkout@v4
+
+      - name: Lire la version depuis version.py
+        shell: bash
+        run: |
+          VERSION=$(grep -oP 'VERSION\s*=\s*"\K[^"]+' version.py)
+          if [ -z "$VERSION" ]; then
+            echo "ERREUR: impossible de lire VERSION dans version.py"
+            exit 1
+          fi
+          TAG="v$VERSION"
+          echo "version=$VERSION" >> $GITHUB_ENV
+          echo "tag=$TAG" >> $GITHUB_ENV
+          echo "Version detectee: $VERSION (tag: $TAG)"
+
+      - name: Verifier que le tag n'existe pas deja
+        shell: bash
+        run: |
+          if git ls-remote --tags origin "$tag" | grep -q "$tag"; then
+            echo "ERREUR: le tag $tag existe deja sur origin. Bump VERSION dans version.py avant de relancer."
             exit 1
           fi
 
-      - name: Nettoyer anciennes versions (garder 3)
+      - name: Installer Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Installer les dependances Python
+        shell: bash
         run: |
-          SUPABASE_URL="${{ secrets.SUPABASE_URL }}"
-          SUPABASE_KEY="${{ secrets.SUPABASE_KEY }}"
+          python -m pip install --upgrade pip
+          pip install pyinstaller PyQt5 requests pywin32
 
-          FILES=$(curl -s \
-            -X POST "$SUPABASE_URL/storage/v1/object/list/updates" \
-            -H "apikey: $SUPABASE_KEY" \
-            -H "Authorization: Bearer $SUPABASE_KEY" \
-            -H "Content-Type: application/json" \
-            -d '{"prefix":"","limit":100,"offset":0,"sortBy":{"column":"created_at","order":"desc"}}')
-
-          TOTAL=$(echo "$FILES" | jq '[.[] | select(.name | endswith(".exe"))] | length')
-          echo "Total fichiers exe dans le bucket: $TOTAL"
-
-          if [ "$TOTAL" -gt 3 ]; then
-            TO_DELETE=$(echo "$FILES" | jq -r '[.[] | select(.name | endswith(".exe"))] | sort_by(.created_at) | reverse | .[3:] | .[].name')
-
-            for FILE in $TO_DELETE; do
-              echo "Suppression ancienne version: $FILE"
-              curl -s -o /dev/null \
-                -X DELETE "$SUPABASE_URL/storage/v1/object/updates/$FILE" \
-                -H "apikey: $SUPABASE_KEY" \
-                -H "Authorization: Bearer $SUPABASE_KEY"
-            done
-            echo "Nettoyage termine"
-          else
-            echo "Moins de 4 fichiers, rien a supprimer"
+      - name: Build du .exe avec PyInstaller
+        shell: bash
+        run: |
+          pyinstaller --clean --noconfirm MementoAgent.spec
+          if [ ! -f "dist/MementoAgent.exe" ]; then
+            echo "ERREUR: dist/MementoAgent.exe introuvable apres le build PyInstaller"
+            ls -la dist/ || true
+            exit 1
           fi
+          SIZE=$(stat -c%s "dist/MementoAgent.exe")
+          echo "Build PyInstaller OK: dist/MementoAgent.exe ($SIZE octets)"
+
+      - name: Creer un .env vide pour Inno Setup
+        shell: bash
+        run: |
+          # installer.iss reference .env avec onlyifdoesntexist
+          # un stub vide est suffisant : la borne le remplit au 1er lancement via le setup wizard
+          touch .env
+
+      - name: Installer Inno Setup
+        shell: pwsh
+        run: |
+          choco install innosetup --version=6.2.2 -y --no-progress
+          $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) {
+            Write-Error "ISCC.exe introuvable apres installation"
+            exit 1
+          }
+          echo "ISCC=$iscc" >> $env:GITHUB_ENV
+
+      - name: Build de l'installeur Inno Setup
+        shell: pwsh
+        run: |
+          & "$env:ISCC" installer.iss
+          $setup = "installer_output\MementoAgent_Setup_$env:version.exe"
+          if (-not (Test-Path $setup)) {
+            Write-Error "Installeur introuvable: $setup"
+            Get-ChildItem installer_output\ -ErrorAction SilentlyContinue
+            exit 1
+          }
+          $size = (Get-Item $setup).Length
+          Write-Host "Installeur OK: $setup ($size octets)"
+          echo "setup_path=$setup" >> $env:GITHUB_ENV
+          echo "setup_name=MementoAgent_Setup_$env:version.exe" >> $env:GITHUB_ENV
+
+      - name: Creer le tag git
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag -a "$tag" -m "Release $tag depuis $branch"
+          git push origin "$tag"
+
+      - name: Creer la release GitHub
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          NOTES="${{ github.event.inputs.notes }}"
+          if [ -z "$NOTES" ]; then
+            NOTES="Release $tag depuis la branche $branch."
+          fi
+
+          PRERELEASE_FLAG=""
+          TITLE_SUFFIX=""
+          if [ "$prerelease" = "true" ]; then
+            PRERELEASE_FLAG="--prerelease"
+            TITLE_SUFFIX=" (pre-release)"
+          fi
+
+          gh release create "$tag" \
+            "$setup_path" \
+            --target "$branch" \
+            --title "Memento Agent $tag$TITLE_SUFFIX" \
+            --notes "$NOTES" \
+            $PRERELEASE_FLAG
+
+          echo "Release creee: $tag (prerelease=$prerelease, branche=$branch, asset=$setup_name)"

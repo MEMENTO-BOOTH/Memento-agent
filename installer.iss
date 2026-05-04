@@ -1,8 +1,25 @@
 #define MyAppName "Memento Agent"
-#define MyAppVersion "1.0.18.18"
 #define MyAppPublisher "Memento Booth"
 #define MyAppExeName "MementoAgent.exe"
 #define MyAppIconFile "assets\logo.ico"
+
+; Lecture de la version depuis version.py (source unique de verite)
+#define VersionFile FileOpen("version.py")
+#define VersionLine ""
+#sub FindVersion
+  #if !FileEof(VersionFile)
+    #define CurLine FileRead(VersionFile)
+    #if (Pos("VERSION", CurLine) == 1) && (Pos("=", CurLine) > 0)
+      #define VersionLine CurLine
+    #endif
+  #endif
+#endsub
+#for {i = 1; i <= 20; i++} FindVersion
+#expr FileClose(VersionFile)
+#if VersionLine == ""
+  #error "VERSION introuvable dans version.py"
+#endif
+#define MyAppVersion Copy(VersionLine, Pos('"', VersionLine) + 1, RPos('"', VersionLine) - Pos('"', VersionLine) - 1)
 
 [Setup]
 AppId={{B3A2F7D1-4E8C-4A2B-9F3D-1C5E7A9B2D4F}

@@ -49,9 +49,16 @@ Application de monitoring pour les bornes Memento Booth. Tourne en arriere-plan 
 
 ## Branches
 
-- **prod** : version stable qui tourne sur les bornes, les mises a jour sont publiees ici
+- **prod** : version stable qui tourne sur les bornes (publie une *release* GitHub)
+- **dev** : developpement et tests (publie une *pre-release* GitHub)
 - **main** : copie de secours de prod
-- **dev** : developpement et tests
+
+Le canal de mise a jour est determine par la branche depuis laquelle le workflow de release est lance :
+
+| Branche | Type publie sur GitHub | Recu par les bornes prod ? |
+|---------|------------------------|----------------------------|
+| `prod`  | release               | oui (via `/releases/latest`) |
+| `dev`   | pre-release           | non (les pre-releases sont ignorees par `/releases/latest`) |
 
 ## Prerequis
 
@@ -70,48 +77,89 @@ SUPABASE_URL=https://votre-projet.supabase.co
 SUPABASE_KEY=votre-cle-supabase
 ```
 
-## Compilation
+## Compilation locale (pour tester)
 
 ```bash
 python -m PyInstaller MementoAgent.spec --clean --noconfirm
 "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer.iss
 ```
 
-Le setup est genere dans installer_output/.
+Le setup est genere dans `installer_output/MementoAgent_Setup_<version>.exe`.
+
+> En production, on **ne builde pas a la main** : le workflow GitHub Actions s'en charge (voir section suivante).
 
 ## Publier une mise a jour
 
-Quand le code est pret et compile, il suffit d'une seule commande :
+Tout passe par GitHub Releases. Le workflow [.github/workflows/release.yml](.github/workflows/release.yml) build et publie automatiquement, et **le type de release (prerelease ou release) est decide selon la branche** depuis laquelle le workflow est lance.
+
+### Pre-requis avant chaque release
+
+1. Bump la version dans [version.py](version.py) (le workflow refuse si le tag `v<version>` existe deja).
+2. Commit et push le bump sur la branche cible (`dev` ou `prod`).
+
+> [version.py](version.py) est la **seule source de verite** pour la version. [installer.iss](installer.iss) lit la valeur via le preprocesseur Inno Setup, pas besoin de la toucher.
+
+### Publier une PRE-RELEASE (canal dev)
+
+Depuis la branche `dev`. Deux options :
+
+**Option A — via l'interface GitHub :**
+
+1. Aller dans l'onglet **Actions** du repo
+2. Cliquer sur le workflow **Build et release Memento Agent**
+3. Cliquer sur **Run workflow**, choisir la branche `dev`
+4. (Optionnel) Remplir le champ *Notes de version*
+5. Cliquer sur **Run workflow**
+
+**Option B — via la CLI `gh` :**
 
 ```bash
-gh release create v1.0.1 installer_output/MementoAgent_Setup_1.0.1.exe --title "Version 1.0.1" --notes "Description des changements" --target prod
+git checkout dev
+git pull
+gh workflow run release.yml --ref dev -f notes="Description des changements"
 ```
 
-C'est tout. Le reste est automatique :
+Resultat : tag `v<version>` cree sur `dev`, asset `MementoAgent_Setup_<version>.exe` attache, **prerelease = true**.
 
-1. Le GitHub Action se declenche
-2. Il telecharge le .exe depuis la release GitHub
-3. Il uploade le .exe dans Supabase Storage (bucket updates)
-4. Il insere une ligne dans la table updates avec l'URL Supabase
-5. Il supprime les anciennes versions dans le bucket (garde les 3 dernieres)
-6. Les bornes detectent la nouvelle version lors de leur verification (toutes les 6 heures)
-7. Elles telechargent le .exe depuis Supabase Storage et l'installent en mode silencieux
+### Publier une RELEASE (canal prod)
 
-Les releases et les .exe restent aussi sur GitHub pour archivage.
+Depuis la branche `prod`. Generalement on merge `dev` -> `prod` puis on declenche.
 
-### Etapes detaillees pour publier
+**Option A — via l'interface GitHub :**
 
-1. Changer la version dans version.py et installer.iss
-2. Compiler avec PyInstaller puis Inno Setup (voir section Compilation)
-3. Commit et push sur prod
-4. Lancer la commande gh release create (voir ci-dessus)
-5. Verifier que le GitHub Action a reussi dans l'onglet Actions du repo
+1. Onglet **Actions** -> **Build et release Memento Agent**
+2. **Run workflow**, choisir la branche `prod`
+3. (Optionnel) Notes de version
+4. **Run workflow**
+
+**Option B — via la CLI `gh` :**
+
+```bash
+git checkout prod
+git merge dev          # ou cherry-pick les commits voulus
+git push
+gh workflow run release.yml --ref prod -f notes="Description des changements"
+```
+
+Resultat : tag `v<version>` cree sur `prod`, asset attache, **prerelease = false** -> visible par toutes les bornes prod a leur prochaine verification (toutes les 6 heures).
+
+### Ce que fait le workflow
+
+1. Verifie qu'il tourne bien depuis `dev` ou `prod` (rejette les autres branches)
+2. Lit la version dans `version.py`, refuse si le tag existe deja
+3. Build le `.exe` avec PyInstaller + `MementoAgent.spec`
+4. Build l'installeur Inno Setup -> `installer_output/MementoAgent_Setup_<version>.exe` (la version est lue par le preprocesseur Inno Setup directement dans `version.py`)
+5. Cree le tag `v<version>` sur la branche et le push
+6. Cree la release GitHub avec l'installeur en piece jointe (`--prerelease` si lance depuis `dev`)
 
 ### Verifier que ca a marche
 
-- Onglet Actions sur GitHub : le workflow doit etre en "success"
-- Table updates dans Supabase : la nouvelle version doit apparaitre avec une URL Supabase Storage
-- Bucket updates dans Supabase Storage : le .exe doit etre present
+- Onglet **Actions** : le workflow doit etre en "success"
+- Onglet **Releases** :
+  - Depuis `dev` -> badge **Pre-release** sur la release
+  - Depuis `prod` -> badge **Latest** (release normale)
+- L'asset attache doit etre `MementoAgent_Setup_<version>.exe`
+- Sur une borne prod : le bouton "Verifier" dans Parametres -> Mise a jour doit detecter la nouvelle version (uniquement pour les release prod, pas les pre-releases)
 
 ## Base de donnees
 
@@ -169,7 +217,7 @@ setup/                      Premier lancement (configuration initiale)
 assets/                     Icones Feather, polices Satoshi, images
 
 .github/workflows/
-  update-supabase-on-release.yml   GitHub Action qui automatise les mises a jour
+  release.yml               Build PyInstaller + Inno Setup + publication GitHub Release/Pre-release
 ```
 
 ## Licence
