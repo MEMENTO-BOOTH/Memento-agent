@@ -3,7 +3,7 @@
 
 a = Analysis(
     ['main.py'],
-    pathex=['.'],
+    pathex=[SPECPATH],
     binaries=[],
     datas=[
         ('assets', 'assets'),

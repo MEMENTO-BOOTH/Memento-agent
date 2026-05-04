@@ -74,7 +74,19 @@ jobs:
       - name: Build du .exe avec PyInstaller
         shell: bash
         run: |
-          pyinstaller --clean --noconfirm --log-level=INFO MementoAgent.spec
+          # --hidden-import en ligne de commande complete les hiddenimports du spec
+          # (dans certains cas les hiddenimports du spec ne sont pas effectifs pour les modules .py top-level)
+          pyinstaller --clean --noconfirm --log-level=INFO \
+            --hidden-import dashboard \
+            --hidden-import TPE \
+            --hidden-import ui_components \
+            --hidden-import activity_logger \
+            --hidden-import user_session \
+            --hidden-import touch_scroll \
+            --hidden-import rupture_screen \
+            --hidden-import version \
+            --hidden-import supabase_client \
+            MementoAgent.spec
           if [ ! -f "dist/MementoAgent.exe" ]; then
             echo "ERREUR: dist/MementoAgent.exe introuvable apres le build PyInstaller"
             ls -la dist/ || true
