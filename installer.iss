@@ -6,6 +6,7 @@
 ; Lecture de la version depuis version.py (source unique de verite)
 #define VersionFile FileOpen("version.py")
 #define VersionLine ""
+#define i 0
 #sub FindVersion
   #if !FileEof(VersionFile)
     #define CurLine FileRead(VersionFile)
