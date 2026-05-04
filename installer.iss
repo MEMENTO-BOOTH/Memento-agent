@@ -4,21 +4,17 @@
 #define MyAppIconFile "assets\logo.ico"
 
 ; Lecture de la version depuis version.py (source unique de verite)
+; Format attendu de version.py :
+;   ligne 1 : """docstring"""
+;   ligne 2 : (vide)
+;   ligne 3 : VERSION = "x.y.z"
 #define VersionFile FileOpen("version.py")
-#define VersionLine ""
-#define i 0
-#sub FindVersion
-  #if !FileEof(VersionFile)
-    #define CurLine FileRead(VersionFile)
-    #if (Pos("VERSION", CurLine) == 1) && (Pos("=", CurLine) > 0)
-      #define VersionLine CurLine
-    #endif
-  #endif
-#endsub
-#for {i = 1; i <= 20; i++} FindVersion
+#expr FileRead(VersionFile)
+#expr FileRead(VersionFile)
+#define VersionLine FileRead(VersionFile)
 #expr FileClose(VersionFile)
-#if VersionLine == ""
-  #error "VERSION introuvable dans version.py"
+#if Pos("VERSION", VersionLine) == 0
+  #error "version.py: ligne VERSION introuvable a la ligne 3 (format inattendu)"
 #endif
 #define MyAppVersion Copy(VersionLine, Pos('"', VersionLine) + 1, RPos('"', VersionLine) - Pos('"', VersionLine) - 1)
 
