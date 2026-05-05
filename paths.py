@@ -20,6 +20,9 @@ _DEFAULTS = {
     "overlay_position":   ("bottom_right",  winreg.REG_SZ),
     "overlay_duration":   (18,              winreg.REG_DWORD),
     "overlay_glow":       (1,               winreg.REG_DWORD),
+    "led_enabled":        (1,               winreg.REG_DWORD),
+    "led_normal_pct":     (5,               winreg.REG_DWORD),
+    "led_boost_pct":      (30,              winreg.REG_DWORD),
 }
 
 

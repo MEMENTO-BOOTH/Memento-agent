@@ -14,6 +14,7 @@ from .emmento import EmentoWatcher, _expirer_anciens_codes
 from .drive_backup import DriveBackup
 from .cashinterface import CashInterfaceWatcher
 from .printer_counter import PrinterCounterWatcher
+from .led_strip import LedStripWatcher
 
 
 class MonitoringEngine(QThread):
@@ -39,6 +40,14 @@ class MonitoringEngine(QThread):
         self._nom_lieu = None
         self._interval = HEARTBEAT_INTERVAL
 
+        # LED watcher : doit demarrer immediatement (HTTP server requis pour
+        # dslrBooth des le 1er capture, meme avant identification borne).
+        self._led = LedStripWatcher()
+        try:
+            self._led.start()
+        except Exception as e:
+            print(f"[LED] Erreur start: {e}")
+
     def set_maintenance(self, on):
         """Active/désactive le mode maintenance.
         En maintenance : heartbeat continue mais PAS de création d'alertes."""
@@ -47,6 +56,10 @@ class MonitoringEngine(QThread):
 
     def stop(self):
         self._running = False
+        try:
+            self._led.stop()
+        except Exception:
+            pass
 
     def run(self):
         # Attendre le réseau
@@ -202,6 +215,10 @@ class MonitoringEngine(QThread):
                         self._printer_counter.tick()
                     except Exception as e:
                         print(f"[PRINTER_COUNTER] Erreur: {e}")
+                    try:
+                        self._led.tick()
+                    except Exception as e:
+                        print(f"[LED] Erreur tick: {e}")
 
         print(f"[MONITORING] Arrêté après {compteur} cycles.")
 
@@ -291,8 +308,11 @@ class MonitoringEngine(QThread):
         from version import VERSION
 
         self._log_maj(f"[MAJ] Verification... VERSION={VERSION} TOKEN={'OK' if supa.GITHUB_TOKEN else 'MANQUANT'}")
-        release = supa.get_latest_github_release()
-        self._log_maj(f"[MAJ] Release GitHub: {release.get('version') if release else 'RIEN'}")
+        release = supa.get_latest_release(self._borne_id)
+        if release:
+            self._log_maj(f"[MAJ] Release ({release.get('channel', '?')}): {release.get('version')}")
+        else:
+            self._log_maj("[MAJ] Aucune release trouvee")
         if not release:
             return
 
@@ -300,24 +320,32 @@ class MonitoringEngine(QThread):
         download_url = release.get("download_url", "")
 
         if not latest or latest == VERSION:
-            self._log_maj(f"[MAJ] Deja a jour ({VERSION})")
-            return
-
-        # Comparer les versions numériquement pour éviter les downgrades
-        def _parse_version(v):
-            try:
-                return [int(x) for x in v.split(".")]
-            except (ValueError, AttributeError):
-                return [0]
-
-        if _parse_version(latest) <= _parse_version(VERSION):
-            self._log_maj(f"[MAJ] Pas de mise a jour ({latest} <= {VERSION})")
+            self._log_maj(f"[MAJ] Deja sur {VERSION} (canal={release.get('channel', '?')})")
             return
 
         if not download_url:
             return
 
-        self._log_maj(f"[MAJ] Nouvelle version: {latest} (actuelle: {VERSION}), telechargement...")
+        # Auto-update : upgrade only. Le downgrade reste possible via la
+        # page Parametres > Mise a jour > Installer maintenant (action explicite
+        # de l'admin). Sans ce garde-fou, un fresh install de v1.0.X.Y serait
+        # immediatement downgrade au demarrage si le canal pointe sur une
+        # version anterieure.
+        def _parse_version(v):
+            try:
+                return tuple(int(x) for x in v.split("."))
+            except (ValueError, AttributeError):
+                return (0,)
+
+        if _parse_version(latest) <= _parse_version(VERSION):
+            self._log_maj(
+                f"[MAJ] Pas d'auto-downgrade ({latest} <= {VERSION}, canal={release.get('channel', '?')})"
+            )
+            return
+
+        self._log_maj(
+            f"[MAJ] Upgrade {VERSION} -> {latest} (canal={release.get('channel', '?')}), telechargement..."
+        )
 
         try:
             r = requests.get(download_url, timeout=120, stream=True, headers={

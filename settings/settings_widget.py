@@ -26,6 +26,7 @@ from .sections import (
     build_apparence_section,
     build_mise_a_jour_section,
     build_animation_section,
+    build_led_section,
 )
 from overlay import config as overlay_cfg
 from overlay.presets import get as get_preset
@@ -158,6 +159,20 @@ class SettingsWidget(QWidget):
         self._ref_anim["toggle"].mousePressEvent_orig = self._ref_anim["toggle"].mousePressEvent
         self._ref_anim["toggle"].mousePressEvent = self._on_toggle_animation
         self._ref_anim["btn_config"].clicked.connect(self._show_animation_overlay)
+        vl.addWidget(t)
+        vl.addWidget(c)
+
+        # ── ÉCLAIRAGE (Pico LED) ──
+        t, c, refs = build_led_section()
+        self._ref_led = refs
+        self._ref_led["toggle_enabled"].mousePressEvent_orig = self._ref_led["toggle_enabled"].mousePressEvent
+        self._ref_led["toggle_enabled"].mousePressEvent = self._on_led_toggle
+        self._ref_led["slider_normal"].valueChanged.connect(self._on_led_normal_changed)
+        self._ref_led["slider_normal"].sliderReleased.connect(self._on_led_normal_released)
+        self._ref_led["slider_boost"].valueChanged.connect(self._on_led_boost_changed)
+        self._ref_led["slider_boost"].sliderReleased.connect(self._on_led_boost_released)
+        self._ref_led["btn_test"].clicked.connect(self._on_led_test)
+        self._wire_led_watcher()
         vl.addWidget(t)
         vl.addWidget(c)
 
@@ -327,7 +342,7 @@ class SettingsWidget(QWidget):
                 lbl.setStyleSheet(f"color: {color}; font-family: 'Inter'; font-size: 12px; font-weight: 400; background: transparent;")
 
     def _fetch_updates(self):
-        self._run(supa.get_latest_github_release, self._on_update_checked)
+        self._run(supa.get_latest_release, self._on_update_checked, self._borne_id)
 
     # ═══════════════════════════════════════════════
     #  ACTIONS — MAINTENANCE
@@ -663,7 +678,7 @@ class SettingsWidget(QWidget):
             "color: rgba(255,255,255,0.7); font-family: 'Satoshi'; "
             "font-size: 12px; background: transparent;"
         )
-        self._run(supa.get_latest_github_release, self._on_update_checked)
+        self._run(supa.get_latest_release, self._on_update_checked, self._borne_id)
 
     def _on_update_checked(self, data):
         from version import VERSION
@@ -675,14 +690,10 @@ class SettingsWidget(QWidget):
             return
 
         latest_version = data.get("version", "")
-
-        def _parse_version(v):
-            try:
-                return [int(x) for x in v.split(".")]
-            except (ValueError, AttributeError):
-                return [0]
-
-        if latest_version and _parse_version(latest_version) > _parse_version(current):
+        # Match canal : on installe la release du canal des qu'elle differe de
+        # la version installee, qu'elle soit plus recente (upgrade) ou plus
+        # ancienne (downgrade voulu suite a un switch dev -> prod).
+        if latest_version and latest_version != current:
             self._latest_update = data
             self._ref_maj["lbl_latest"].setText(
                 f"Une nouvelle version est disponible : v{latest_version}"
@@ -762,25 +773,6 @@ class SettingsWidget(QWidget):
         self._ref_maj["btn_install"].setText(f"v{version} téléchargée !")
         self._ref_maj["badge"].setText("  Installation...  ")
 
-        # Marquer comme installé dans Supabase
-        if self._borne_id and self._latest_update:
-            update_id = self._latest_update.get("id")
-            if update_id:
-                import requests
-                try:
-                    requests.post(
-                        f"{supa.SUPABASE_URL}/rest/v1/updates_bornes",
-                        headers=supa.HEADERS_MINIMAL,
-                        json={
-                            "borne_id": self._borne_id,
-                            "update_id": update_id,
-                            "statut": "installee",
-                        },
-                        timeout=10,
-                    )
-                except Exception:
-                    pass
-
         # Lancer l'installeur en mode silencieux (pas de fenêtres, pas de questions)
         if platform.system() == "Windows" and path.endswith((".exe", ".msi")):
             subprocess.Popen([path, "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART"], shell=True)
@@ -808,6 +800,101 @@ class SettingsWidget(QWidget):
         cfg = load_config()
         cfg["langue"] = "en" if index == 1 else "fr"
         save_config(cfg)
+
+    # ═══════════════════════════════════════════════
+    #  ACTIONS — ÉCLAIRAGE (Pico LED)
+    # ═══════════════════════════════════════════════
+
+    def _led_watcher(self):
+        """Retourne le LedStripWatcher actif, ou None si le monitoring n'est pas encore en place."""
+        try:
+            mon = getattr(self.window(), "_monitor", None)
+            return getattr(mon, "_led", None) if mon else None
+        except Exception:
+            return None
+
+    def _wire_led_watcher(self):
+        """Connecte status_changed du watcher au label de statut + affiche l'etat initial."""
+        from paths import reg_get
+        w = self._led_watcher()
+        if w is None:
+            self._on_led_status_changed(False, "Monitoring inactif")
+            return
+        try:
+            w.status_changed.connect(self._on_led_status_changed)
+        except Exception:
+            pass
+        if w.is_connected():
+            self._on_led_status_changed(True, w.port_name() or "Connecte")
+        else:
+            self._on_led_status_changed(False, "Recherche...")
+
+    def _on_led_status_changed(self, connected, msg):
+        lbl = self._ref_led.get("lbl_status")
+        if not lbl:
+            return
+        if connected:
+            text, color = f"Connecte ({msg})", "#3DA755"
+        elif msg in ("Monitoring inactif", "pyserial absent"):
+            text, color = msg, "#888888"
+        elif "Recherche" in msg or "non detecte" in msg:
+            text, color = msg, "#888888"
+        else:
+            text, color = msg, "#D14B4B"
+        lbl.setText(text)
+        lbl.setStyleSheet(
+            f"color: {color}; font-family: 'Inter'; font-size: 13px; "
+            f"font-weight: 600; background: transparent;"
+        )
+
+    def _on_led_toggle(self, event):
+        from paths import reg_set
+        from ui_components import toast
+        toggle = self._ref_led["toggle_enabled"]
+        toggle.mousePressEvent_orig(event)
+        is_on = toggle.is_on()
+        reg_set("led_enabled", 1 if is_on else 0)
+        w = self._led_watcher()
+        if w:
+            if is_on:
+                w.on()
+            else:
+                w.off()
+        toast("Eclairage " + ("active" if is_on else "desactive"),
+              "success" if is_on else "warning")
+
+    def _on_led_normal_changed(self, value):
+        self._ref_led["lbl_normal_value"].setText(f"{int(value)}%")
+
+    def _on_led_normal_released(self):
+        value = int(self._ref_led["slider_normal"].value())
+        w = self._led_watcher()
+        if w:
+            w.set_normal(value)
+        else:
+            from paths import reg_set
+            reg_set("led_normal_pct", value)
+
+    def _on_led_boost_changed(self, value):
+        self._ref_led["lbl_boost_value"].setText(f"{int(value)}%")
+
+    def _on_led_boost_released(self):
+        value = int(self._ref_led["slider_boost"].value())
+        w = self._led_watcher()
+        if w:
+            w.set_boost(value)
+        else:
+            from paths import reg_set
+            reg_set("led_boost_pct", value)
+
+    def _on_led_test(self):
+        from ui_components import toast
+        w = self._led_watcher()
+        if not w or not w.is_connected():
+            toast("Pico non connecte - test impossible", "error")
+            return
+        w.boost()
+        toast("Boost envoye", "success")
 
     # ═══════════════════════════════════════════════
     #  RESIZE — garder les overlays à la bonne taille

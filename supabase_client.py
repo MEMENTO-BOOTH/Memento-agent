@@ -40,6 +40,12 @@ SUPABASE_URL = os.environ.get("SUPABASE_URL") or _env.get("SUPABASE_URL", "")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY") or _env.get("SUPABASE_KEY", "")
 GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN") or _env.get("GITHUB_TOKEN", "")
 GITHUB_REPO = "MEMENTO-BOOTH/Memento-agent"
+DASHBOARD_URL = (
+    os.environ.get("DASHBOARD_URL")
+    or _env.get("DASHBOARD_URL")
+    or "https://dashboard.mementobooth.fr"
+).rstrip("/")
+AGENT_API_TOKEN = os.environ.get("AGENT_API_TOKEN") or _env.get("AGENT_API_TOKEN", "")
 
 HEADERS = {
     "apikey": SUPABASE_KEY,
@@ -316,22 +322,50 @@ def get_ca_stats(transactions):
     }
 
 
-def get_latest_update():
-    """Récupère la dernière mise à jour publiée."""
+def _get_borne_environnement(borne_id):
+    """Lit le canal de mise a jour ('prod' ou 'dev') de la borne dans Supabase.
+    Defaut 'prod' si la borne n'existe pas, si la requete echoue ou si la
+    valeur est invalide."""
+    if not borne_id:
+        return "prod"
     try:
         r = requests.get(
-            _url("updates?select=*&order=publiee_at.desc&limit=1"),
+            _url(f"bornes?id=eq.{borne_id}&select=environnement"),
             headers=HEADERS, timeout=TIMEOUT,
         )
         if r.status_code == 200 and r.json():
-            return r.json()[0]
+            env = r.json()[0].get("environnement")
+            if env in ("prod", "dev"):
+                return env
     except Exception:
         pass
-    return None
+    return "prod"
 
 
-def get_latest_github_release():
-    """Récupère la dernière release depuis GitHub (repo privé)."""
+def _fetch_dashboard_release(channel):
+    """Appelle le dashboard /api/agent/release/{channel}. Retourne le dict
+    decode JSON ou None si echec / non configure."""
+    if not DASHBOARD_URL or not AGENT_API_TOKEN:
+        return None
+    try:
+        r = requests.get(
+            f"{DASHBOARD_URL}/api/agent/release/{channel}",
+            headers={"Authorization": f"Bearer {AGENT_API_TOKEN}"},
+            timeout=TIMEOUT,
+        )
+        if r.status_code != 200:
+            print(f"[MAJ] Dashboard {channel} HTTP {r.status_code}: {r.text[:120]}")
+            return None
+        return r.json()
+    except Exception as e:
+        print(f"[MAJ] Dashboard {channel} erreur: {e}")
+        return None
+
+
+def _fetch_github_release_fallback():
+    """Fallback : appel direct GitHub /releases/latest si le dashboard est
+    injoignable. Ne tape que les releases full (pas de pre-release) — donc
+    se comporte comme le canal 'prod'."""
     if not GITHUB_TOKEN:
         return None
     try:
@@ -346,37 +380,44 @@ def get_latest_github_release():
         if r.status_code != 200:
             return None
         release = r.json()
-        version = release.get("tag_name", "").lstrip("v")
-        notes = release.get("body", "")
-        exe_asset = None
         for asset in release.get("assets", []):
             if asset["name"].endswith(".exe"):
-                exe_asset = asset
-                break
-        if not exe_asset:
-            return None
-        return {
-            "version": version,
-            "download_url": exe_asset["url"],
-            "filename": exe_asset["name"],
-            "notes": notes,
-        }
-    except Exception:
-        return None
-
-
-def get_update_status(borne_id):
-    """Récupère le statut de mise à jour de cette borne."""
-    try:
-        r = requests.get(
-            _url(f"updates_bornes?borne_id=eq.{borne_id}&select=*,update:updates(version)&order=created_at.desc&limit=1"),
-            headers=HEADERS, timeout=TIMEOUT,
-        )
-        if r.status_code == 200 and r.json():
-            return r.json()[0]
+                return {
+                    "version": release.get("tag_name", "").lstrip("v"),
+                    "download_url": asset["url"],
+                    "filename": asset["name"],
+                    "notes": release.get("body", ""),
+                    "channel": "prod",
+                }
     except Exception:
         pass
     return None
+
+
+def get_latest_release(borne_id=None):
+    """Recupere la derniere release pour cette borne via le dashboard,
+    selon son canal (`bornes.environnement` dans Supabase).
+
+    Retour identique a l'ancien `get_latest_github_release` :
+        {version, download_url, filename, notes}
+    + champ `channel` ('prod'/'dev') pour le diagnostic.
+
+    Fallback automatique sur GitHub /releases/latest (= canal 'prod')
+    si le dashboard est injoignable ou non configure."""
+    channel = _get_borne_environnement(borne_id)
+    data = _fetch_dashboard_release(channel)
+    if data:
+        asset = data.get("asset") or {}
+        return {
+            "version": data.get("version", ""),
+            "download_url": asset.get("downloadUrl", ""),
+            "filename": asset.get("name", ""),
+            "notes": data.get("notes", ""),
+            "channel": data.get("channel", channel),
+        }
+    # Fallback GitHub direct (toujours canal prod)
+    print(f"[MAJ] Fallback GitHub direct (canal={channel} -> prod)")
+    return _fetch_github_release_fallback()
 
 
 def get_utilisateurs():

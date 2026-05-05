@@ -2,7 +2,7 @@
 import os
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel,
-    QPushButton, QFrame, QComboBox, QLineEdit
+    QPushButton, QFrame, QComboBox, QLineEdit, QSlider
 )
 from PyQt5.QtCore import Qt, QRectF
 from PyQt5.QtGui import QPainter, QColor, QPen, QPainterPath, QFont, QPalette
@@ -160,3 +160,34 @@ def lime_btn(text):
         QPushButton:hover {{ background-color: #A8EE4A; }}
     """)
     return btn
+
+
+def styled_slider(minimum=0, maximum=100, value=0):
+    """Slider horizontal stylise — track lime sur la sub-page, handle blanc avec border."""
+    s = QSlider(Qt.Horizontal)
+    s.setMinimum(minimum)
+    s.setMaximum(maximum)
+    s.setValue(value)
+    s.setFixedHeight(28)
+    s.setMinimumWidth(220)
+    s.setCursor(Qt.PointingHandCursor)
+    s.setStyleSheet(f"""
+        QSlider::groove:horizontal {{
+            border: none; height: 6px; border-radius: 3px;
+            background: {T()['card_border']};
+        }}
+        QSlider::sub-page:horizontal {{
+            background: {LIME_GREEN}; border-radius: 3px; height: 6px;
+        }}
+        QSlider::add-page:horizontal {{
+            background: {T()['card_border']}; border-radius: 3px; height: 6px;
+        }}
+        QSlider::handle:horizontal {{
+            background: white; border: 1.7px solid {T()['card_border']};
+            width: 18px; height: 18px; margin: -7px 0; border-radius: 9px;
+        }}
+        QSlider::handle:horizontal:hover {{
+            border: 1.7px solid {LIME_GREEN};
+        }}
+    """)
+    return s

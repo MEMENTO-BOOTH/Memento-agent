@@ -7,3 +7,4 @@ from .notifications import build_notifications_section
 from .apparence import build_apparence_section
 from .mise_a_jour import build_mise_a_jour_section
 from .animation_impression import build_animation_section
+from .led import build_led_section
