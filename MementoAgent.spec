@@ -29,6 +29,8 @@ a = Analysis(
         'monitoring.led_strip',
         'settings.sections.led',
         'serial', 'serial.tools', 'serial.tools.list_ports',
+        'google.auth', 'google.oauth2', 'google.oauth2.service_account',
+        'googleapiclient', 'googleapiclient.discovery',
         'win32print', 'win32api', 'pywintypes', 'win32timezone',
     ],
     hookspath=[],

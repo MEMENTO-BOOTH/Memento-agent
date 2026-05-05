@@ -45,6 +45,19 @@ DSLRBOOTH_DB = os.path.join(
 TAILLE_MIN_ORIGINAL = 100_000   # 100 Ko
 TAILLE_MIN_PRINT = 10_000       # 10 Ko
 
+# Health checks Drive
+# Niveau A : test ecriture/suppression dans le dossier local — detecte
+#            Drive Desktop eteint, lecture-seule, dossier disparu.
+# Niveau B : appel API Google Drive — seul moyen de detecter une sync
+#            silencieusement cassee (Drive Desktop accepte le local mais
+#            ne pousse plus vers le cloud, cas observe sur La Planque
+#            29/04 : 42 sessions perdues pendant 60h sans alerte).
+HEALTH_CHECK_INTERVAL_SEC = 60
+API_HEALTH_CHECK_INTERVAL_SEC = 300
+
+# Scope minimal pour le check API (lecture-seule, principe du moindre privilege)
+DRIVE_API_SCOPES = ["https://www.googleapis.com/auth/drive.readonly"]
+
 
 def _trouver_google_drive():
     """Détecte automatiquement le chemin Google Drive (FR ou EN).
@@ -168,6 +181,12 @@ class DriveBackup:
         self._current_event = None
         self._total_copies = 0
         self._start_time = time.time()  # Ne copier que les fichiers créés après ce moment
+
+        # Health checks
+        self._last_local_check_ts = 0.0
+        self._last_api_check_ts = 0.0
+        self._drive_root_folder_id = None  # cache, resolu via API au 1er check B
+
         self._init_drive()
 
     def _init_drive(self):
@@ -249,22 +268,140 @@ class DriveBackup:
         except Exception:
             pass
 
+    # --- Health checks ----------------------------------------------------
+
+    def _drive_writable_local(self):
+        """Niveau A : test ecriture/suppression d'un fichier sentinelle dans
+        le sous-dossier de cette borne. Detecte les pannes filesystem
+        (Drive Desktop eteint, dossier disparu, permissions cassees).
+        Ne detecte PAS le cas 'sync silencieusement cassee' (cf. niveau B)."""
+        if not self._drive_base or not os.path.isdir(self._drive_base):
+            return False
+        sentinel = os.path.join(self._drive_base, ".memento_health")
+        try:
+            with open(sentinel, "w", encoding="utf-8") as f:
+                f.write("ok")
+            os.remove(sentinel)
+            return True
+        except Exception as e:
+            print(f"[DRIVE] Health check local FAIL: {e}")
+            return False
+
+    def _drive_api_check(self):
+        """Niveau B : appel API Google Drive via le Service Account.
+        Le SA doit avoir un acces 'Lecteur' sur le dossier
+        Mon Drive\\dslrBooth\\<nom_lieu>\\ partage manuellement.
+
+        Retourne :
+          - True si l'API repond et le dossier est accessible (cloud OK)
+          - False si l'API echoue (sync silencieusement cassee)
+          - None si non configure (GOOGLE_SA_JSON absent ou libs google
+            absentes) — le niveau B est skipe gracieusement, le niveau A
+            continue de tourner.
+        """
+        sa_json_str = os.environ.get("GOOGLE_SA_JSON")
+        if not sa_json_str:
+            return None
+        try:
+            from google.oauth2 import service_account
+            from googleapiclient.discovery import build
+        except ImportError:
+            return None
+        try:
+            creds = service_account.Credentials.from_service_account_info(
+                json.loads(sa_json_str),
+                scopes=DRIVE_API_SCOPES,
+            )
+            service = build("drive", "v3", credentials=creds, cache_discovery=False)
+
+            if not self._drive_root_folder_id:
+                self._drive_root_folder_id = self._resolve_root_folder_id(service)
+                if not self._drive_root_folder_id:
+                    # Pas de dossier partage avec le SA — rien a check pour cette borne
+                    return None
+
+            # Liste les enfants : un appel reussi = cloud accessible
+            service.files().list(
+                q=f"'{self._drive_root_folder_id}' in parents and trashed=false",
+                pageSize=5,
+                fields="files(id,name)",
+                supportsAllDrives=False,
+                includeItemsFromAllDrives=False,
+            ).execute()
+            return True
+        except Exception as e:
+            print(f"[DRIVE] Health check API FAIL: {e}")
+            return False
+
+    def _resolve_root_folder_id(self, service):
+        """Cherche le folder Drive 'dslrBooth/<nom_lieu>' partage avec le SA.
+        Retourne son folder_id ou None si pas trouve / pas partage."""
+        try:
+            results = service.files().list(
+                q=(
+                    f"name='{self._nom_lieu}' and "
+                    f"mimeType='application/vnd.google-apps.folder' and "
+                    f"trashed=false"
+                ),
+                pageSize=10,
+                fields="files(id,name)",
+                supportsAllDrives=False,
+                includeItemsFromAllDrives=False,
+            ).execute()
+            files = results.get("files", [])
+            if not files:
+                print(f"[DRIVE] Aucun folder '{self._nom_lieu}' partage avec le SA")
+                return None
+            # Si plusieurs (ne devrait pas arriver), on prend le premier
+            return files[0]["id"]
+        except Exception as e:
+            print(f"[DRIVE] Erreur resolution root folder: {e}")
+            return None
+
+    # --- Tick principal ---------------------------------------------------
+
     def tick(self):
-        """Appelé à chaque cycle du monitoring."""
+        """Cycle de monitoring Drive (appele toutes les ~60s par engine.run)."""
         if not self._drive_base:
-            # Réessayer de trouver Google Drive
             self._init_drive()
             if not self._drive_base:
                 return
-        else:
-            # Vérifier que le Drive est toujours accessible
-            if not os.path.isdir(self._drive_base):
-                drive = _trouver_google_drive()
-                if not drive:
-                    print("[DRIVE] Google Drive déconnecté")
-                    self._drive_base = None
-                    self._creer_alerte_drive()
-                    return
+
+        now = time.time()
+
+        # Niveau A : ecriture locale toutes les HEALTH_CHECK_INTERVAL_SEC
+        if now - self._last_local_check_ts >= HEALTH_CHECK_INTERVAL_SEC:
+            self._last_local_check_ts = now
+            if not self._drive_writable_local():
+                import activity_logger as alog
+                alog.log_generic(
+                    "DRIVE",
+                    "Health check local FAIL — Drive Desktop ne repond pas",
+                )
+                self._drive_base = None
+                self._creer_alerte_drive("local_write_failed")
+                return
+            else:
+                # Local OK -> resoudre l'alerte 'drive_deconnecte' si elle etait ouverte
+                self._resoudre_alerte_drive("local_write_failed")
+
+        # Niveau B : appel API toutes les API_HEALTH_CHECK_INTERVAL_SEC
+        if now - self._last_api_check_ts >= API_HEALTH_CHECK_INTERVAL_SEC:
+            self._last_api_check_ts = now
+            api_ok = self._drive_api_check()
+            if api_ok is False:
+                # Local marche, mais le cloud ne repond pas -> sync cassee
+                import activity_logger as alog
+                alog.log_generic(
+                    "DRIVE",
+                    "Health check API FAIL — sync vers cloud cassee",
+                )
+                self._creer_alerte_drive("cloud_sync_silently_broken")
+                # Ne pas reset _drive_base : on continue a copier en local
+                # en attendant que le cloud reparte.
+            elif api_ok is True:
+                self._resoudre_alerte_drive("cloud_sync_silently_broken")
+            # api_ok is None -> SA non configure, on skip silencieusement
 
         # Détecter l'événement actif
         event = _detecter_evenement()
