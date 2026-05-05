@@ -145,7 +145,6 @@ class DriveBackup:
         self._events = {}  # event_name → {"originals": set, "prints": set}
         self._current_event = None
         self._total_copies = 0
-        self._drive_alerte_envoyee = False
         self._start_time = time.time()  # Ne copier que les fichiers créés après ce moment
         self._init_drive()
 
@@ -158,37 +157,46 @@ class DriveBackup:
             alog.ui_log("Google Drive inaccessible")
             self._creer_alerte_drive()
             return
-        # Drive trouvé — vérifier qu'on peut écrire
+        # Construire le chemin specifique de cette borne et tester l'ecriture
+        # SUR CE CHEMIN (pas sur la racine). Si le sous-dossier est en lecture
+        # seule alors que la racine ecrit, on detecte ici la difference.
+        drive_base = os.path.join(drive, "dslrBooth", self._nom_lieu)
         try:
-            test_path = os.path.join(drive, ".memento_test")
+            os.makedirs(drive_base, exist_ok=True)
+            test_path = os.path.join(drive_base, ".memento_test")
             with open(test_path, "w") as f:
                 f.write("test")
             os.remove(test_path)
-        except Exception:
-            print("[DRIVE] Google Drive en lecture seule ou déconnecté")
+        except Exception as e:
+            print(f"[DRIVE] {drive_base} en lecture seule ou inaccessible: {e}")
             import activity_logger as alog
             alog.ui_log("Google Drive déconnecté ou en lecture seule")
             self._creer_alerte_drive()
             return
         # Tout OK — résoudre l'alerte si elle était ouverte
-        self._drive_base = os.path.join(drive, "dslrBooth", self._nom_lieu)
+        self._drive_base = drive_base
         self._resoudre_alerte_drive()
-        self._drive_alerte_envoyee = False
         print(f"[DRIVE] Base: {self._drive_base}")
 
     def _creer_alerte_drive(self):
-        if self._drive_alerte_envoyee or not self._borne_id:
+        """Cree une alerte drive_deconnecte si pas deja ouverte en base.
+
+        La deduplication est assuree par _alerte_deja_ouverte() qui consulte
+        Supabase — la source unique de verite. Pas de flag local : un flag
+        bloquerait la re-creation apres une resolution externe (admin manuel
+        ou bug de fausse resolution)."""
+        if not self._borne_id:
             return
-        self._drive_alerte_envoyee = True
         try:
             from monitoring.alertes.alertes_monitor import _creer_alerte, _alerte_deja_ouverte
-            if not _alerte_deja_ouverte(self._borne_id, "drive_deconnecte"):
-                bar = self._nom_lieu.split(" (")[0] if " (" in self._nom_lieu else self._nom_lieu
-                _creer_alerte(
-                    self._borne_id, "drive_deconnecte", "drive",
-                    f"Google Drive deconnecte ou inaccessible sur {bar}.",
-                    "warning",
-                )
+            if _alerte_deja_ouverte(self._borne_id, "drive_deconnecte"):
+                return
+            bar = self._nom_lieu.split(" (")[0] if " (" in self._nom_lieu else self._nom_lieu
+            _creer_alerte(
+                self._borne_id, "drive_deconnecte", "drive",
+                f"Google Drive deconnecte ou inaccessible sur {bar}.",
+                "warning",
+            )
         except Exception as e:
             print(f"[DRIVE] Erreur creation alerte: {e}")
 
