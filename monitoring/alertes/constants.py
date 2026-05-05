@@ -75,4 +75,6 @@ TOUS_TYPES_ALERTES = [
     "crash_dslrbooth", "disque_bas", "disque_plein",
     "crash_relance", "borne_hors_ligne",
     "impression_non_delivree",  # client a payé, papier jamais sorti (vérif DS620 GetMediaCounter)
+    "drive_deconnecte",         # Drive Desktop éteint / lecture-seule / dossier disparu
+    "drive_sync_cassee",        # Drive Desktop tourne mais ne sync plus vers le cloud (token expiré, compte déconnecté)
 ]

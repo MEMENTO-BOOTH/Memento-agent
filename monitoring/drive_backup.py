@@ -12,6 +12,28 @@ from datetime import datetime
 import supabase_client as supa
 
 DSLRBOOTH_BASE = r"C:\dslrBooth"
+
+# Mapping reason interne -> (type d'alerte Supabase, gabarit du message client).
+# Le {bar} sera remplace par le nom du bar de la borne.
+DRIVE_ALERTS = {
+    "local_write_failed": {
+        "type": "drive_deconnecte",
+        "message": (
+            "Google Drive est eteint ou bloque sur {bar}. Les photos ne sont "
+            "plus sauvegardees en ligne. Redemarrer l'application Google Drive "
+            "sur la borne."
+        ),
+    },
+    "cloud_sync_silently_broken": {
+        "type": "drive_sync_cassee",
+        "message": (
+            "Google Drive ne synchronise plus les photos vers le cloud sur {bar} "
+            "— l'application tourne mais les fichiers restent en local. Verifier "
+            "la connexion du compte Google sur la borne, il a probablement ete "
+            "deconnecte."
+        ),
+    },
+}
 DSLRBOOTH_CONFIG = os.path.join(
     os.environ.get("APPDATA", ""), "dslrBooth", "app_settings_2021.json"
 )
@@ -178,34 +200,52 @@ class DriveBackup:
         self._resoudre_alerte_drive()
         print(f"[DRIVE] Base: {self._drive_base}")
 
-    def _creer_alerte_drive(self):
-        """Cree une alerte drive_deconnecte si pas deja ouverte en base.
+    def _creer_alerte_drive(self, reason="local_write_failed"):
+        """Cree l'alerte correspondant a `reason` si pas deja ouverte en base.
 
         La deduplication est assuree par _alerte_deja_ouverte() qui consulte
         Supabase — la source unique de verite. Pas de flag local : un flag
         bloquerait la re-creation apres une resolution externe (admin manuel
-        ou bug de fausse resolution)."""
+        ou bug de fausse resolution).
+
+        reasons supportees :
+          - 'local_write_failed' -> alerte drive_deconnecte
+          - 'cloud_sync_silently_broken' -> alerte drive_sync_cassee
+        """
         if not self._borne_id:
+            return
+        spec = DRIVE_ALERTS.get(reason)
+        if not spec:
+            print(f"[DRIVE] reason inconnu: {reason}")
             return
         try:
             from monitoring.alertes.alertes_monitor import _creer_alerte, _alerte_deja_ouverte
-            if _alerte_deja_ouverte(self._borne_id, "drive_deconnecte"):
+            if _alerte_deja_ouverte(self._borne_id, spec["type"]):
                 return
             bar = self._nom_lieu.split(" (")[0] if " (" in self._nom_lieu else self._nom_lieu
             _creer_alerte(
-                self._borne_id, "drive_deconnecte", "drive",
-                f"Google Drive deconnecte ou inaccessible sur {bar}.",
+                self._borne_id, spec["type"], "drive",
+                spec["message"].format(bar=bar),
                 "warning",
             )
         except Exception as e:
             print(f"[DRIVE] Erreur creation alerte: {e}")
 
-    def _resoudre_alerte_drive(self):
+    def _resoudre_alerte_drive(self, reason=None):
+        """Resout l'alerte associee a `reason`. Si reason est None, resout les
+        deux types (utilise au demarrage / reconnexion globale)."""
         if not self._borne_id:
             return
+        if reason is None:
+            types = [spec["type"] for spec in DRIVE_ALERTS.values()]
+        else:
+            spec = DRIVE_ALERTS.get(reason)
+            if not spec:
+                return
+            types = [spec["type"]]
         try:
             from monitoring.alertes.alertes_monitor import _resoudre_alertes
-            _resoudre_alertes(self._borne_id, ["drive_deconnecte"])
+            _resoudre_alertes(self._borne_id, types)
         except Exception:
             pass
 
