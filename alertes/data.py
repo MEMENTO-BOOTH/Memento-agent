@@ -117,7 +117,7 @@ def resolve_alerte(alerte_id):
             json={
                 "statut": "resolue",
                 "resolue_par": "agent-manuel",
-                "resolue_at": datetime.now().isoformat(),
+                "resolue_at": datetime.now().astimezone().isoformat(),
             },
             timeout=10,
         )
@@ -137,7 +137,7 @@ def assign_alerte(alerte_id, assignee):
             json={
                 "statut": "assignee",
                 "assignee_a": assignee,
-                "assignee_at": datetime.now().isoformat(),
+                "assignee_at": datetime.now().astimezone().isoformat(),
             },
             timeout=10,
         )

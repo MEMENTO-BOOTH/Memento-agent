@@ -208,7 +208,7 @@ class PrinterCounterWatcher:
     # --- Supabase ----------------------------------------------------
     def _fetch_pending_transactions(self):
         cutoff = (
-            datetime.now() - timedelta(seconds=TX_LOOKBACK_S)
+            datetime.now().astimezone() - timedelta(seconds=TX_LOOKBACK_S)
         ).isoformat().replace("+", "%2B")
         try:
             r = requests.get(
@@ -253,7 +253,7 @@ class PrinterCounterWatcher:
                 "message": f"Un client a paye sur {bar} a {heure} mais sa photo n'est pas sortie de l'imprimante.",
                 "gravite": "critique",
                 "statut": "ouverte",
-                "timestamp": datetime.now().isoformat(),
+                "timestamp": datetime.now().astimezone().isoformat(),
             }
             requests.post(
                 f"{supa.SUPABASE_URL}/rest/v1/alertes",
@@ -280,7 +280,9 @@ class PrinterCounterWatcher:
         if not pending:
             return
 
-        now_utc = datetime.now()
+        # nom 'now_local' parce que paiement_at est strippe de sa tz juste apres,
+        # donc on compare 2 datetimes naifs locaux. Cf. bloc clean ci-dessous.
+        now_local = datetime.now()
 
         for tx in pending:
             tx_id = tx["id"]
@@ -296,7 +298,7 @@ class PrinterCounterWatcher:
             except ValueError:
                 continue
 
-            ecart = (now_utc - paiement_at).total_seconds()
+            ecart = (now_local - paiement_at).total_seconds()
 
             # ─── Compteur lisible : verification standard ───
             if counter_now is not None:

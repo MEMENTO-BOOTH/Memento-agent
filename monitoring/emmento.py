@@ -105,7 +105,7 @@ def _expirer_anciens_codes():
     """Marque les codes de plus de 2 mois comme expirés."""
     try:
         from datetime import timedelta
-        cutoff = (datetime.now() - timedelta(days=60)).isoformat()
+        cutoff = (datetime.now().astimezone() - timedelta(days=60)).isoformat()
         requests.patch(
             f"{supa.SUPABASE_URL}/rest/v1/ememento"
             f"?timestamp=lt.{cutoff}&statut=eq.en_attente",
@@ -311,7 +311,7 @@ class EmentoWatcher:
                             "photos": [],
                             "originals": [],
                             "bar": "inconnu",
-                            "timestamp": datetime.now().isoformat(),
+                            "timestamp": datetime.now().astimezone().isoformat(),
                         }
                         print(f"[EMMENTO] Session en cours récupérée: {session_id} → code: {code}")
                         _generer_image_code(code)
@@ -375,7 +375,7 @@ class EmentoWatcher:
                 "photos": [],
                 "originals": [],
                 "bar": "inconnu",
-                "timestamp": datetime.now().isoformat(),
+                "timestamp": datetime.now().astimezone().isoformat(),
             }
             print(f"[EMMENTO] Nouvelle session: {nouveau_id} → code: {code}")
             import activity_logger as alog
