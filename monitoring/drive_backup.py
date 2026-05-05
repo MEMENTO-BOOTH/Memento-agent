@@ -25,10 +25,23 @@ TAILLE_MIN_PRINT = 10_000       # 10 Ko
 
 
 def _trouver_google_drive():
-    """Détecte automatiquement le chemin Google Drive (FR ou EN)."""
+    """Détecte automatiquement le chemin Google Drive (FR ou EN).
+
+    Couvre 2 modes de Drive Desktop :
+      - mode 'stream' : virtual drive monte sur une lettre (G:, H:, ...)
+      - mode 'mirror' : sous-dossier dans le profil utilisateur Windows
+        C:\\Users\\<user>\\ — observe sur certaines bornes apres un update
+        de Drive Desktop qui change le mode par defaut.
+    """
     for lettre in "GHIJDEFKLM":
         for nom in ("Mon Drive", "My Drive"):
             chemin = f"{lettre}:\\{nom}"
+            if os.path.isdir(chemin):
+                return chemin
+    user_profile = os.environ.get("USERPROFILE")
+    if user_profile:
+        for nom in ("Mon Drive", "My Drive"):
+            chemin = os.path.join(user_profile, nom)
             if os.path.isdir(chemin):
                 return chemin
     return None
