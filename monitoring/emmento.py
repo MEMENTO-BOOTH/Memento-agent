@@ -21,6 +21,13 @@ CODE_LENGTH = 7
 # Fenêtre de temps (en secondes) pour chercher les Originals
 ORIGINALS_TIME_WINDOW = 60
 
+# Re-scan apres l'envoi initial : rattrape les originals movés en retard
+# par dslrbooth (race condition entre l'ecriture du print_log et le move des
+# fichiers vers <bar>\Originals\).
+RESCAN_DELAY_SEC = 30      # delai entre l'envoi initial et le rescan
+RESCAN_TTL_SEC = 300       # garde-fou contre une fuite memoire si un rescan
+                           # bloque pour une raison quelconque
+
 DSLRBOOTH_LOG = os.path.join(
     os.environ.get("APPDATA", ""), "dslrBooth", "Logs", "dslrbooth.log"
 )
@@ -188,19 +195,27 @@ def _get_bar_from_path(chemin):
         return "inconnu"
 
 
-def _trouver_originals(bar, timestamp_print):
+def _trouver_originals(bar, timestamp_print, timestamp_max=None):
+    """Cherche les originals dont le mtime tombe dans la fenetre
+    [print_ts - ORIGINALS_TIME_WINDOW, timestamp_max].
+
+    timestamp_max permet d'elargir la fenetre apres le print (utilise par le
+    re-scan apres RESCAN_DELAY_SEC pour rattraper les fichiers movés en
+    retard par dslrbooth). Si None, on plafonne au print_ts (comportement
+    historique)."""
     originals_dir = os.path.join(DSLRBOOTH_BASE, bar, "Originals")
     if not os.path.exists(originals_dir):
         return []
     originals = []
     try:
+        upper = timestamp_max if timestamp_max is not None else timestamp_print
         window_start = timestamp_print - ORIGINALS_TIME_WINDOW
         for f in os.listdir(originals_dir):
             if not f.lower().endswith((".jpg", ".jpeg", ".png", ".bmp")):
                 continue
             chemin = os.path.join(originals_dir, f)
             mtime = os.path.getmtime(chemin)
-            if window_start <= mtime <= timestamp_print:
+            if window_start <= mtime <= upper:
                 originals.append(chemin)
     except Exception:
         pass
@@ -264,6 +279,11 @@ class EmentoWatcher:
             "bar": "inconnu",
             "timestamp": None,
         }
+        # session_id -> {bar, print_ts, code, timestamp, photos,
+        #                originals_envoyes, deadline}
+        # Re-scan differé pour rattraper les originals movés en retard apres
+        # le print_log (race condition dslrbooth).
+        self._pending_rescans = {}
         # Démarrer à la fin du fichier — ne traiter que les NOUVELLES lignes
         self._position = 0
         try:
@@ -306,7 +326,11 @@ class EmentoWatcher:
 
     def tick(self):
         """Appelé à chaque cycle du monitoring (~3s).
-        Lit les nouvelles lignes du log dslrBooth."""
+        Lit les nouvelles lignes du log dslrBooth + traite les re-scans."""
+        # Rescan des sessions deja envoyees pour rattraper les originals
+        # movés en retard (race condition dslrbooth)
+        self._process_rescans()
+
         if not os.path.exists(DSLRBOOTH_LOG):
             return
 
@@ -420,6 +444,79 @@ class EmentoWatcher:
             originals=self._etat["originals"],
             borne_id=self._borne_id,
         )
+
+        # Programmer un re-scan des Originals pour rattraper les fichiers
+        # movés en retard par dslrbooth. Si un nouveau print arrive avant
+        # que le rescan ne fire, on ECRASE l'entree existante avec le nouvel
+        # etat + nouvelle deadline (donc rescan = 30s apres le DERNIER print
+        # de la session, pas du premier).
+        self._pending_rescans[self._etat["session_id"]] = {
+            "bar": self._etat["bar"],
+            "print_ts": time.time(),
+            "code": self._etat["code"],
+            "timestamp": self._etat["timestamp"],
+            "photos": list(self._etat["photos"]),
+            "originals_envoyes": list(self._etat["originals"]),
+            "deadline": time.time() + RESCAN_DELAY_SEC,
+        }
+
+    def _process_rescans(self):
+        """Traite les re-scans en attente : nettoie les expirés (TTL),
+        et pour chaque deadline atteinte, re-liste <bar>\\Originals\\ pour
+        detecter les fichiers movés en retard. UPDATE Supabase si de
+        nouveaux originals sont apparus."""
+        now = time.time()
+
+        # Garde-fou : nettoyer les rescans coinces depuis trop longtemps
+        # (theoriquement impossible, mais evite une fuite memoire silencieuse
+        # si une exception non-attrapée tuait le rescan a mi-parcours).
+        stale_ids = [
+            sid for sid, r in self._pending_rescans.items()
+            if now - r["deadline"] > RESCAN_TTL_SEC
+        ]
+        for sid in stale_ids:
+            self._pending_rescans.pop(sid, None)
+            print(f"[EMMENTO] Rescan {sid} expire (>{RESCAN_TTL_SEC}s), abandon")
+
+        # Traiter les rescans dont le deadline est atteint
+        ready_ids = [
+            sid for sid, r in self._pending_rescans.items()
+            if r["deadline"] <= now
+        ]
+        for sid in ready_ids:
+            r = self._pending_rescans.pop(sid)
+            try:
+                new_originals = _trouver_originals(
+                    r["bar"], r["print_ts"], timestamp_max=now,
+                )
+                envoyes = set(r["originals_envoyes"])
+                trouves = set(new_originals)
+                ajoutes = trouves - envoyes
+                if not ajoutes:
+                    continue  # rien de neuf, pas de update inutile
+
+                _envoyer_supabase(
+                    session_id=sid,
+                    bar=r["bar"],
+                    timestamp=r["timestamp"],
+                    photos=r["photos"],
+                    code=r["code"],
+                    originals=sorted(new_originals, key=lambda p: os.path.getmtime(p)),
+                    borne_id=self._borne_id,
+                )
+                print(
+                    f"[EMMENTO] Rescan {sid}: +{len(ajoutes)} originals "
+                    f"(total {len(new_originals)})"
+                )
+                import activity_logger as alog
+                alog.log_generic(
+                    "EMMENTO",
+                    f"Rescan {r['code']}: +{len(ajoutes)} originals "
+                    f"rattrapes (total {len(new_originals)})",
+                )
+                alog.ui_log(f"Rescan {r['code']}: +{len(ajoutes)} originals rattrapes")
+            except Exception as e:
+                print(f"[EMMENTO] Erreur rescan {sid}: {e}")
 
     def _confirmer_impression(self):
         """Marque la dernière transaction non-confirmée comme imprimée dans Supabase."""
