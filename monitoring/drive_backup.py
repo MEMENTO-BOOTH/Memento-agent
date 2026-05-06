@@ -55,6 +55,15 @@ TAILLE_MIN_PRINT = 10_000       # 10 Ko
 HEALTH_CHECK_INTERVAL_SEC = 60
 API_HEALTH_CHECK_INTERVAL_SEC = 300
 
+# Bug Latina Cafe : sur certaines bornes, les .jpg sont deposes directement
+# a la racine de C:\dslrBooth\ au lieu d'un sous-dossier <event>\Originals\.
+# On considere qu'un fichier est "persistant a la racine" (= non transitoire,
+# ne sera pas move par dslrbooth dans son event) s'il est encore la apres
+# RACINE_PERSIST_SEC. L'agent le MOVE alors vers <bar>\Originals\ (ou <bar>
+# = nom du bar de la borne), le scanner standard prendra ensuite le relais
+# pour l'uploader vers Drive.
+RACINE_PERSIST_SEC = 60
+
 # Scope minimal pour le check API (lecture-seule, principe du moindre privilege)
 DRIVE_API_SCOPES = ["https://www.googleapis.com/auth/drive.readonly"]
 
@@ -167,6 +176,23 @@ def _lister_jpgs(directory, exclure_thumb=False):
         return set()
 
 
+def _lister_jpgs_racine(directory):
+    """Liste les .jpg/.jpeg directement a la racine de `directory`, en ignorant
+    les sous-dossiers (Settings, Templates, events). En mode standard dslrbooth
+    ce set est toujours vide. S'il n'est pas vide -> bornes type Latina Cafe."""
+    try:
+        fichiers = set()
+        for entry in os.listdir(directory):
+            full = os.path.join(directory, entry)
+            if not os.path.isfile(full):
+                continue
+            if entry.lower().endswith((".jpg", ".jpeg")):
+                fichiers.add(entry)
+        return fichiers
+    except Exception:
+        return set()
+
+
 def _fichier_valide(path, taille_min):
     if not os.path.exists(path):
         return False
@@ -202,6 +228,13 @@ class DriveBackup:
         self._last_local_check_ts = 0.0
         self._last_api_check_ts = 0.0
         self._drive_root_folder_id = None  # cache, resolu via API au 1er check B
+
+        # Scan racine (bug Latina Cafe) : pour chaque .jpg vu a la racine,
+        # on note l'instant de la 1ere observation. Si le fichier persiste
+        # > RACINE_PERSIST_SEC, c'est qu'il ne sera pas move par dslrbooth
+        # -> on le DEPLACE en local vers <RACINE_FALLBACK_EVENT>/Originals/
+        # et le scanner standard l'upload ensuite vers Drive.
+        self._racine_seen_at = {}  # filename -> first_seen_ts
 
         self._init_drive()
 
@@ -374,6 +407,76 @@ class DriveBackup:
             print(f"[DRIVE] Erreur resolution root folder: {e}")
             return None
 
+    # --- Rattrapage fichiers racine C:\dslrBooth\ (bug Latina Cafe) ------
+
+    def _scan_racine(self):
+        """Sur les bornes en mode anormal (cas Latina Cafe), dslrbooth depose
+        les .jpg directement a la racine de C:\\dslrBooth\\ au lieu d'un
+        sous-dossier <event>\\Originals\\. Le code legacy ne les voyait jamais.
+
+        Strategie silencieuse : pour chaque .jpg vu a la racine, on note
+        l'instant. Si le fichier persiste plus de RACINE_PERSIST_SEC (= il
+        n'a pas ete move par dslrbooth, donc on est dans le cas anormal),
+        on le DEPLACE vers `C:\\dslrBooth\\<RACINE_FALLBACK_EVENT>\\Originals\\`.
+
+        Le scanner standard (via _detecter_evenement + _scanner) prendra
+        ensuite le relais pour uploader le fichier vers Drive normalement.
+        Pas d'alerte : c'est un fix transparent."""
+        if not self._drive_base:
+            return
+
+        actuels = _lister_jpgs_racine(DSLRBOOTH_BASE)
+        now = time.time()
+
+        # Oublier les fichiers qui ont disparu (dslrbooth les a moves
+        # = ils etaient transitoires sur une borne en mode standard)
+        for f in list(self._racine_seen_at.keys()):
+            if f not in actuels:
+                self._racine_seen_at.pop(f)
+
+        # Noter les nouveaux a leur 1ere apparition
+        for f in actuels:
+            if f not in self._racine_seen_at:
+                self._racine_seen_at[f] = now
+
+        # Move les fichiers persistants vers <bar>\Originals\ (= meme convention
+        # que dslrbooth normal, ou le nom du bar est l'event)
+        bar = self._nom_lieu.split(" (")[0] if " (" in self._nom_lieu else self._nom_lieu
+        target_dir = os.path.join(DSLRBOOTH_BASE, bar, "Originals")
+        moves = 0
+        for f, first_seen in list(self._racine_seen_at.items()):
+            if now - first_seen < RACINE_PERSIST_SEC:
+                continue
+            src = os.path.join(DSLRBOOTH_BASE, f)
+            try:
+                if os.path.getmtime(src) < self._start_time:
+                    self._racine_seen_at.pop(f)  # pre-existant, on n'y touche pas
+                    continue
+            except OSError:
+                self._racine_seen_at.pop(f)
+                continue
+            if not _fichier_valide(src, TAILLE_MIN_ORIGINAL):
+                continue
+            try:
+                os.makedirs(target_dir, exist_ok=True)
+                dst = os.path.join(target_dir, f)
+                if os.path.exists(dst):
+                    # Collision (ne devrait pas arriver vu que dslrbooth
+                    # genere des noms uniques). Skip pour ne rien ecraser.
+                    self._racine_seen_at.pop(f)
+                    continue
+                shutil.move(src, dst)
+                self._racine_seen_at.pop(f)
+                moves += 1
+            except Exception as e:
+                print(f"[DRIVE] Erreur move {f} -> {target_dir}: {e}")
+
+        if moves:
+            print(
+                f"[DRIVE] {moves} fichier(s) racine moves vers "
+                f"{bar}/Originals/ (le scanner les uploadera)"
+            )
+
     # --- Tick principal ---------------------------------------------------
 
     def tick(self):
@@ -418,6 +521,9 @@ class DriveBackup:
             elif api_ok is True:
                 self._resoudre_alerte_drive("cloud_sync_silently_broken")
             # api_ok is None -> SA non configure, on skip silencieusement
+
+        # Rattrapage des fichiers a la racine de C:\dslrBooth\ (bug Latina Cafe)
+        self._scan_racine()
 
         # Détecter l'événement actif
         event = _detecter_evenement()
