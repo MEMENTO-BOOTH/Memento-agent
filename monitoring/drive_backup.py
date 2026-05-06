@@ -58,6 +58,22 @@ API_HEALTH_CHECK_INTERVAL_SEC = 300
 # Scope minimal pour le check API (lecture-seule, principe du moindre privilege)
 DRIVE_API_SCOPES = ["https://www.googleapis.com/auth/drive.readonly"]
 
+# Cle JSON du Service Account Google qui fait le health check API.
+# Hardcodee ici (repo prive) pour que toutes les bornes — anciennes comme
+# nouvelles — l'embarquent automatiquement via auto-update, sans avoir
+# besoin d'editer le .env de chaque borne en TeamViewer.
+# Override possible via env var GOOGLE_SA_JSON (utile en dev/test).
+# Pour la rotation : remplacer la valeur ci-dessous + bump version + release.
+# Le scope drive.readonly limite ce qu'un attaquant pourrait faire si l'exe
+# fuitait (il pourrait juste LISTER les fichiers des dossiers partages).
+_DEFAULT_GOOGLE_SA_JSON = ""  # ← coller ici le contenu JSON du SA, sur 1 ligne
+
+
+def _get_sa_json():
+    """Retourne la cle SA — env var d'abord (override), sinon constante.
+    Retourne une string vide si non configure (le check niveau B sera skipe)."""
+    return os.environ.get("GOOGLE_SA_JSON") or _DEFAULT_GOOGLE_SA_JSON
+
 
 def _trouver_google_drive():
     """Détecte automatiquement le chemin Google Drive (FR ou EN).
@@ -299,7 +315,7 @@ class DriveBackup:
             absentes) — le niveau B est skipe gracieusement, le niveau A
             continue de tourner.
         """
-        sa_json_str = os.environ.get("GOOGLE_SA_JSON")
+        sa_json_str = _get_sa_json()
         if not sa_json_str:
             return None
         try:
