@@ -169,10 +169,10 @@ class PrintStartDetector(QObject):
                 pass
         self._dll_port = -1
 
-    def _fire_start(self, source):
-        _log(f"START from {source}")
+    def _fire_start(self, source, job_id=None):
+        _log(f"START from {source} (job_id={job_id})")
         try:
-            self._cb_start()
+            self._cb_start(job_id)
         except Exception as e:
             _log(f"cb_start error: {e}")
 
@@ -193,8 +193,10 @@ class PrintStartDetector(QObject):
             cur = {j["JobId"] for j in jobs}
             new_jobs = cur - self._known_jobs
             self._known_jobs |= cur
-            if new_jobs:
-                self._fire_start(f"spool jobs={sorted(new_jobs)}")
+            # Un fire par JobId = 1 barre par impression reelle, meme si plusieurs
+            # impressions arrivent dans le meme tick ou tres rapprochees.
+            for jid in sorted(new_jobs):
+                self._fire_start(f"spool job={jid}", job_id=jid)
         except Exception as e:
             _log(f"spool poll error: {e}")
             self._close_spool()

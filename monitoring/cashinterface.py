@@ -118,7 +118,14 @@ class CashInterfaceWatcher:
             alog.log_tpe_erreur(error)
 
     def _confirmer_impression(self, keystroke_dt):
-        """Marque la dernière transaction comme imprimée dans Supabase."""
+        """Marque la transaction la plus ancienne en attente comme imprimee.
+
+        order=asc et pas desc : un keystroke P correspond a la session qui
+        vient de finir = la PLUS ANCIENNE pending (file FIFO), pas la plus
+        recente. Avec desc, quand 2 clients payaient coup sur coup, le 2eme
+        se retrouvait marque imprimee avant que sa propre photo soit sortie,
+        et le 1er restait coince en pending. Le bug "ne s'empile plus".
+        """
         if not self._borne_id:
             return
         try:
@@ -127,7 +134,7 @@ class CashInterfaceWatcher:
                 f"{supa.SUPABASE_URL}/rest/v1/transactions"
                 f"?borne_id=eq.{self._borne_id}"
                 f"&impression_declenchee=eq.false"
-                f"&order=paiement_at.desc&limit=1&select=id,paiement_at",
+                f"&order=paiement_at.asc&limit=1&select=id,paiement_at",
                 headers=supa.HEADERS, timeout=5,
             )
             if r.status_code == 200 and r.json():

@@ -519,16 +519,21 @@ class EmentoWatcher:
                 print(f"[EMMENTO] Erreur rescan {sid}: {e}")
 
     def _confirmer_impression(self):
-        """Marque la dernière transaction non-confirmée comme imprimée dans Supabase."""
+        """Marque la transaction la plus ancienne non-confirmee (FIFO).
+
+        order=asc : un signal d'impression correspond a la session qui vient
+        de finir = la PLUS ANCIENNE pending. Avec desc, plusieurs paiements
+        rapproches voyaient leur signal mal attribue (cf. fix similaire dans
+        cashinterface.py)."""
         if not self._borne_id:
             return
         try:
-            # Trouver la dernière transaction sans impression confirmée
+            # Trouver la plus ancienne transaction sans impression confirmee
             r = requests.get(
                 f"{supa.SUPABASE_URL}/rest/v1/transactions"
                 f"?borne_id=eq.{self._borne_id}"
                 f"&impression_declenchee=eq.false"
-                f"&order=paiement_at.desc&limit=1&select=id,paiement_at",
+                f"&order=paiement_at.asc&limit=1&select=id,paiement_at",
                 headers=supa.HEADERS, timeout=5,
             )
             if r.status_code == 200 and r.json():

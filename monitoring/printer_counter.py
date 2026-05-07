@@ -284,7 +284,18 @@ class PrinterCounterWatcher:
         # donc on compare 2 datetimes naifs locaux. Cf. bloc clean ci-dessous.
         now_local = datetime.now()
 
-        for tx in pending:
+        # Compteur effectif decremente a chaque tx marquee dans CE tick.
+        # Pourquoi : quand plusieurs clients paient coup sur coup, ils ont tous
+        # le meme `feuilles_avant` (snapshot pris au paiement, le compteur n'a
+        # pas eu le temps de bouger). A la 1ere baisse du compteur, sans cet
+        # accumulateur, TOUTES les pending ont baisse>=1 et sont marquees
+        # imprimees d'un coup -> dashboard "ne s'empile plus" pour le client.
+        # En decrementant le compteur effectif a chaque attribution, seules
+        # les N plus anciennes pending sont marquees, ou N = nb de feuilles
+        # reellement consommees depuis leur snapshot.
+        attributed_in_tick = 0
+
+        for i, tx in enumerate(pending):
             tx_id = tx["id"]
             if tx_id in self._resolved:
                 continue
@@ -302,34 +313,40 @@ class PrinterCounterWatcher:
 
             # ─── Compteur lisible : verification standard ───
             if counter_now is not None:
+                effective_counter = counter_now + attributed_in_tick
+
                 # Snapshot feuilles_avant si pas deja fait
                 feuilles_avant = tx.get("feuilles_avant")
                 if feuilles_avant is None:
                     ref = self._counter_at(paiement_at)
                     if ref is None:
-                        ref = counter_now
+                        ref = effective_counter
                     self._patch(tx_id, {"feuilles_avant": ref})
                     feuilles_avant = ref
 
-                baisse = feuilles_avant - counter_now
+                baisse = feuilles_avant - effective_counter
 
                 if baisse >= 1:
-                    anomalie = None
-                    if baisse >= 2:
-                        anomalie = "multiple"
+                    # On NE detecte plus 'multiple' automatiquement : trop de
+                    # faux positifs quand une tx voit son `feuilles_avant`
+                    # rester stale alors qu'une tx anterieure (deja resolue
+                    # et hors pending) a consomme des feuilles entre temps.
+                    # Pour detecter une vraie anomalie 'multiple' (1 tx = 2
+                    # feuilles), faire la reconciliation cote dashboard sur
+                    # totaux journaliers.
                     self._patch(tx_id, {
-                        "feuilles_apres": counter_now,
+                        "feuilles_apres": effective_counter,
                         "impression_verifiee_papier": True,
                         "impression_declenchee": True,
-                        "anomalie_impression": anomalie,
+                        "anomalie_impression": None,
                     })
                     self._resolved.add(tx_id)
+                    attributed_in_tick += 1
                     import activity_logger as alog
                     alog.log_tpe_confirmation(tx_id)
                     print(
                         f"[PRINTER_COUNTER] Impression verifiee {tx_id[:8]} "
-                        f"({feuilles_avant}->{counter_now})"
-                        + (" [MULTIPLE]" if anomalie == "multiple" else "")
+                        f"({feuilles_avant}->{effective_counter})"
                     )
                     continue
 

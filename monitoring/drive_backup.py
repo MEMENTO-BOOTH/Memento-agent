@@ -107,9 +107,42 @@ def _trouver_google_drive():
     return None
 
 
+def _detecter_tous_evenements():
+    """Liste TOUS les sous-dossiers de C:\\dslrBooth\\ qui ont une structure
+    d'event (= au moins un sous-dossier Originals\\ ou Prints\\). Exclus les
+    dossiers systeme (Settings, Templates).
+
+    Pourquoi tous : l'agent ne peut pas faire confiance a 'l'event courant'
+    de dslrbooth pour decider quoi scanner. Cas observes :
+      - bornes multi-event qui basculent vite entre soirees
+      - rattrapage des fichiers moves a la racine vers <bar>\\Originals\\
+        (cf. _scan_racine, bug Latina Cafe) — <bar> n'est jamais l'event
+        courant, donc invisible au scanner mono-event
+      - sessions en cours dans un ancien dossier event que dslrbooth a oublie
+        de marquer comme actif (cas La Planque 2026-04-29)
+    """
+    events = []
+    EXCLUS = {"Settings", "Templates"}
+    try:
+        for nom in os.listdir(DSLRBOOTH_BASE):
+            if nom in EXCLUS:
+                continue
+            chemin = os.path.join(DSLRBOOTH_BASE, nom)
+            if not os.path.isdir(chemin):
+                continue
+            if (os.path.isdir(os.path.join(chemin, "Originals")) or
+                    os.path.isdir(os.path.join(chemin, "Prints"))):
+                events.append(nom)
+    except Exception:
+        pass
+    return events
+
+
 def _detecter_evenement():
     """Lit l'événement actif depuis la config dslrBooth.
-    Si la DB est vide ou absente, utilise le dossier le plus récent dans C:\\dslrBooth\\."""
+    Si la DB est vide ou absente, utilise le dossier le plus récent dans C:\\dslrBooth\\.
+    Conserve pour le logging d'event 'principal' uniquement — le scanner traite
+    desormais TOUS les events (cf. _detecter_tous_evenements)."""
     event_id = None
     try:
         with open(DSLRBOOTH_CONFIG, "r", encoding="utf-8") as f:
@@ -525,24 +558,28 @@ class DriveBackup:
         # Rattrapage des fichiers a la racine de C:\dslrBooth\ (bug Latina Cafe)
         self._scan_racine()
 
-        # Détecter l'événement actif
-        event = _detecter_evenement()
-        if not event:
+        # Scanner TOUS les events presents sur disque (pas juste le courant).
+        # cf. _detecter_tous_evenements pour le pourquoi.
+        events = _detecter_tous_evenements()
+        if not events:
             return
 
-        if event != self._current_event:
-            print(f"[DRIVE] Événement: {event}")
+        principal = _detecter_evenement()
+        if principal and principal != self._current_event:
+            print(f"[DRIVE] Événement: {principal}")
             import activity_logger as alog
-            alog.log_drive_event(event)
-            alog.ui_log(f"Nouvel événement détecté: {event}")
-            self._current_event = event
+            alog.log_drive_event(principal)
+            alog.ui_log(f"Nouvel événement détecté: {principal}")
+            self._current_event = principal
+
+        for event in events:
             if event not in self._events:
                 self._init_event(event)
-
-        if event not in self._events:
-            return
-
-        self._scanner(event)
+            if event in self._events:
+                try:
+                    self._scanner(event)
+                except Exception as e:
+                    print(f"[DRIVE] Erreur scan {event}: {e}")
 
     def _init_event(self, event_name):
         """Initialise le suivi. Ne copie que les fichiers créés après le démarrage de l'agent."""

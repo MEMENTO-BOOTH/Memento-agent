@@ -193,9 +193,66 @@ $ErrorActionPreference = "SilentlyContinue"
 $printerName = "{printer_name}"
 $regPath = "HKLM:\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Print\\Printers\\$printerName"
 $targetByte = {target_byte}
+$targetMode = "{target_smtj}"
 $logFile = "{LOG_PATH.replace(os.sep, '/')}"
 
 function Log($msg) {{ Add-Content -Path $logFile -Value "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') [PS-ADMIN] $msg" }}
+
+# Reconstruit le contenu SMTJ (paires cle=valeur ASCII) pour le mode demande.
+# Necessite de connaitre le nom de base de l'imprimante (sans suffixe " (Copie...)").
+function Get-SmtjContent([string]$baseName, [string]$cutMode) {{
+    $bytes = [System.Collections.Generic.List[byte]]::new()
+    $nameBytes = [System.Text.Encoding]::Unicode.GetBytes($baseName)
+    $bytes.AddRange($nameBytes)
+    $bytes.Add(0); $bytes.Add(0)
+    $pairs = @(
+        "InputBin","FORMSOURCE","RESDLL","UniresDLL",
+        "Orientation","PORTRAIT","Resolution","Option1",
+        "PrintMargin","MarginOff","OVERCOATTYPE","OPTYPE_LUSTER",
+        "PRINTBUFFCONTROL","PBC_NONCLEAR","CUTTERCONTROL",$cutMode,
+        "PaperSize","PC","MediaType","STANDARD",
+        "ColorMode","24bpp","Halftone","HT_PATSIZE_SUPERCELL_M"
+    )
+    for ($i = 0; $i -lt $pairs.Count; $i += 2) {{
+        $bytes.AddRange([System.Text.Encoding]::ASCII.GetBytes($pairs[$i]))
+        $bytes.Add(0)
+        $bytes.AddRange([System.Text.Encoding]::ASCII.GetBytes($pairs[$i+1]))
+        $bytes.Add(0)
+    }}
+    return $bytes.ToArray()
+}}
+
+# Trouve la section SMTJ dans le DEVMODE (marqueur SMTJ...TFSM) et ecrit le bon contenu.
+# Retourne $true si patche, $false si les marqueurs sont introuvables.
+function Patch-DevmodeSmtj($dm, [string]$cutMode, [string]$printerName) {{
+    $ascii = [System.Text.Encoding]::ASCII
+    $smtjBytes = $ascii.GetBytes("SMTJ")
+    $tfsmBytes = $ascii.GetBytes("TFSM")
+    $smtjIdx = -1
+    for ($i = 0; $i -le $dm.Length - 4; $i++) {{
+        if ($dm[$i] -eq $smtjBytes[0] -and $dm[$i+1] -eq $smtjBytes[1] -and
+            $dm[$i+2] -eq $smtjBytes[2] -and $dm[$i+3] -eq $smtjBytes[3]) {{
+            $smtjIdx = $i; break
+        }}
+    }}
+    if ($smtjIdx -lt 0) {{ return $false }}
+    $textStart = $smtjIdx + 12
+    $tfsmIdx = -1
+    for ($i = $textStart; $i -le $dm.Length - 4; $i++) {{
+        if ($dm[$i] -eq $tfsmBytes[0] -and $dm[$i+1] -eq $tfsmBytes[1] -and
+            $dm[$i+2] -eq $tfsmBytes[2] -and $dm[$i+3] -eq $tfsmBytes[3]) {{
+            $tfsmIdx = $i; break
+        }}
+    }}
+    if ($tfsmIdx -lt 0) {{ return $false }}
+    $available = $tfsmIdx - $textStart
+    $baseName = if ($printerName -match '^(.+) \\(') {{ $Matches[1] }} else {{ $printerName }}
+    $content = [byte[]](Get-SmtjContent -baseName $baseName -cutMode $cutMode)
+    $writeLen = [Math]::Min($content.Length, $available)
+    [System.Array]::Copy($content, 0, $dm, $textStart, $writeLen)
+    for ($i = $writeLen; $i -lt $available; $i++) {{ $dm[$textStart + $i] = 0 }}
+    return $true
+}}
 
 # Arreter le spooler
 Log "Arret spooler..."
@@ -204,29 +261,29 @@ Start-Sleep -Seconds 1
 
 # Modifier HKLM Default DevMode
 try {{
-    $dm = (Get-ItemProperty -Path $regPath -Name "Default DevMode")."Default DevMode"
+    $dm = [byte[]](Get-ItemProperty -Path $regPath -Name "Default DevMode")."Default DevMode"
     if ($dm -and $dm.Length -gt 282) {{
         $dm[282] = $targetByte
-        # Modifier section SMTJ si presente
-        $smtjText = [System.Text.Encoding]::ASCII.GetString($dm)
-        if ($smtjText -match "{other_smtj}") {{
-            $oldBytes = [System.Text.Encoding]::ASCII.GetBytes("{other_smtj}")
-            $newBytes = [System.Text.Encoding]::ASCII.GetBytes("{target_smtj}")
-            $str = [System.Text.Encoding]::ASCII.GetString($dm)
-            $idx = $str.IndexOf("{other_smtj}")
-            if ($idx -ge 0) {{
-                # Remplacer les bytes directement
-                for ($i = 0; $i -lt $newBytes.Length; $i++) {{
-                    $dm[$idx + $i] = $newBytes[$i]
-                }}
-                # Si le nouveau est plus court, remplir avec des zeros
-                for ($i = $newBytes.Length; $i -lt $oldBytes.Length; $i++) {{
-                    $dm[$idx + $i] = 0
-                }}
+        $smtjOk = Patch-DevmodeSmtj -dm $dm -cutMode $targetMode -printerName $printerName
+        if (-not $smtjOk) {{
+            # Fallback: copier la zone SMTJ depuis printer_settings.xml (si TFSM absent du blob HKLM)
+            $xmlPath = Join-Path $env:APPDATA "dslrBooth\\printer_settings.xml"
+            if (Test-Path $xmlPath) {{
+                try {{
+                    $xmlText = (Get-Content -Path $xmlPath -Raw -Encoding UTF8) -replace "[\\r\\n]",""
+                    if ($xmlText -match 'PageDevmodeSnapshot.*?xsd:string[^>]*>([A-Za-z0-9+/=]+)<') {{
+                        $srcBlob = [byte[]][Convert]::FromBase64String($Matches[1])
+                        if ($srcBlob.Length -ge 1148) {{
+                            [System.Array]::Copy($srcBlob, 840, $dm, 840, 308)
+                            $smtjOk = $true
+                            Log "HKLM: SMTJ copie depuis XML (fallback)"
+                        }}
+                    }}
+                }} catch {{ Log "HKLM: erreur XML: $_" }}
             }}
         }}
         Set-ItemProperty -Path $regPath -Name "Default DevMode" -Value $dm -Type Binary
-        Log "HKLM: byte 282 = $targetByte, SMTJ = {target_smtj}"
+        Log "HKLM: byte 282 = $targetByte, SMTJ = $targetMode (patched=$smtjOk)"
     }} else {{
         Log "HKLM: DEVMODE trop court ou introuvable"
     }}
@@ -241,23 +298,12 @@ Get-ChildItem $profilesReg | ForEach-Object {{
     if ($sid.Length -lt 20) {{ return }}
     $hkuPath = "Registry::HKEY_USERS\\$sid\\Printers\\DevModePerUser"
     try {{
-        $dmUser = (Get-ItemProperty -Path $hkuPath -Name $printerName -ErrorAction Stop).$printerName
+        $dmUser = [byte[]](Get-ItemProperty -Path $hkuPath -Name $printerName -ErrorAction Stop).$printerName
         if ($dmUser -and $dmUser.Length -gt 282) {{
             $dmUser[282] = $targetByte
-            $str = [System.Text.Encoding]::ASCII.GetString($dmUser)
-            $idx = $str.IndexOf("{other_smtj}")
-            if ($idx -ge 0) {{
-                $newBytes = [System.Text.Encoding]::ASCII.GetBytes("{target_smtj}")
-                $oldBytes = [System.Text.Encoding]::ASCII.GetBytes("{other_smtj}")
-                for ($i = 0; $i -lt $newBytes.Length; $i++) {{
-                    $dmUser[$idx + $i] = $newBytes[$i]
-                }}
-                for ($i = $newBytes.Length; $i -lt $oldBytes.Length; $i++) {{
-                    $dmUser[$idx + $i] = 0
-                }}
-            }}
+            Patch-DevmodeSmtj -dm $dmUser -cutMode $targetMode -printerName $printerName | Out-Null
             Set-ItemProperty -Path $hkuPath -Name $printerName -Value $dmUser -Type Binary
-            Log "HKU ($sid): byte 282 = $targetByte"
+            Log "HKU ($sid): byte 282 = $targetByte, SMTJ = $targetMode"
         }}
     }} catch {{ }}
 }}
@@ -380,6 +426,52 @@ def _modify_dslrbooth(activate=True):
 
 
 # ═══════════════════════════════════════════════════════════════
+#  Étape 2b : HKCU DevModePerUser (sans admin, priorité sur HKLM)
+# ═══════════════════════════════════════════════════════════════
+
+def _modify_hkcu_devmode(printer_name, activate=True):
+    """Écrit le bon DEVMODE dans HKCU\\Printers\\DevModePerUser.
+    Ne nécessite pas admin et prend priorité sur le HKLM Default DevMode.
+    Clé du problème : le DEVMODE HKLM a une section SMTJ vide (zéros) — le driver
+    DNP DS620 lit la SMTJ pour le mode coupe et ignore le byte 282 seul. Le per-user
+    DEVMODE (HKCU) contient lui une SMTJ complète avec CUT_2INCH/CUT_STANDARD, extraite
+    du printer_settings.xml de dslrBooth qui est toujours correct après _modify_dslrbooth."""
+    import re
+    import base64
+    import winreg
+
+    new_mode = "CUT_2INCH" if activate else "CUT_STANDARD"
+    target_byte = 1 if activate else 0
+
+    # Source : blob DEVMODE depuis printer_settings.xml (SMTJ déjà rempli correctement)
+    xml_path = os.path.join(os.environ.get("APPDATA", ""), "dslrBooth", "printer_settings.xml")
+    if not os.path.exists(xml_path):
+        logging.warning("_modify_hkcu_devmode: printer_settings.xml absent")
+        return False
+    try:
+        with open(xml_path, "r", encoding="utf-8") as f:
+            content = f.read()
+        flat = content.replace("\n", "").replace("\r", "")
+        m = re.search(r'PageDevmodeSnapshot.*?xsd:string[^>]*>([A-Za-z0-9+/=]+)<', flat)
+        if not m:
+            logging.warning("_modify_hkcu_devmode: pas de PageDevmodeSnapshot")
+            return False
+        dm = bytearray(base64.b64decode(m.group(1)))
+        dm[CUTTERCONTROL_DEVMODE_OFFSET] = target_byte
+        dm, _ = _fix_smtj_section(dm, target=new_mode)
+
+        hkcu_path = r"Printers\DevModePerUser"
+        with winreg.CreateKeyEx(winreg.HKEY_CURRENT_USER, hkcu_path,
+                                0, winreg.KEY_SET_VALUE) as k:
+            winreg.SetValueEx(k, printer_name, 0, winreg.REG_BINARY, bytes(dm))
+        logging.info(f"HKCU DevModePerUser: {printer_name} → {new_mode}")
+        return True
+    except Exception as e:
+        logging.error(f"_modify_hkcu_devmode: {e}")
+        return False
+
+
+# ═══════════════════════════════════════════════════════════════
 #  Étape 3 : Hardware DLL (SetCutterMode)
 # ═══════════════════════════════════════════════════════════════
 
@@ -446,6 +538,35 @@ def _launch_dslrbooth():
             return
 
 
+def _wait_ps1_done(timeout=15):
+    """Attend que le script PS1 admin ait fini (marqueur 'Termine.' dans coupe.log).
+    Retourne True si terminé dans le délai, False si timeout.
+    Nécessaire car ShellExecuteW lance le PS1 de façon asynchrone : sans attente,
+    _set_hardware_cutter est appelé AVANT que le spooler soit redémarré, et le
+    redémarrage du spooler remet l'imprimante en CUT_STANDARD."""
+    import time
+    deadline = time.time() + timeout
+    marker = "[PS-ADMIN] Termine."
+    # Mémoriser la taille du log avant de lancer le PS1 pour n'inspecter
+    # que le contenu nouveau (évite de confondre avec un 'Termine.' d'une
+    # activation précédente qui serait encore dans les dernières lignes).
+    try:
+        start_pos = os.path.getsize(LOG_PATH)
+    except Exception:
+        start_pos = 0
+    while time.time() < deadline:
+        try:
+            with open(LOG_PATH, "r", encoding="utf-8", errors="ignore") as f:
+                f.seek(start_pos)
+                if marker in f.read():
+                    return True
+        except Exception:
+            pass
+        time.sleep(0.5)
+    logging.warning("Timeout attente PS1 admin (spooler peut ne pas être prêt)")
+    return False
+
+
 def activer_coupe():
     """Active la coupe 2 pouces (ferme dslrBooth → registre → XML → DLL → relance)."""
     if platform.system() != "Windows":
@@ -461,16 +582,26 @@ def activer_coupe():
     # 0. Fermer dslrBooth AVANT
     was_running = _restart_dslrbooth()
 
-    # 1. Registre
+    # 1. Registre HKLM via PS1 admin (async — arrête et redémarre le spooler)
     _modify_registry(printer_name, activate=True)
 
-    # 2. dslrBooth XML
+    # 2. dslrBooth XML (pendant que le PS1 tourne en fond)
     _modify_dslrbooth(activate=True)
 
-    # 3. Hardware DLL
+    # 2b. HKCU DevModePerUser — corrige la SMTJ vide du HKLM sans admin.
+    #     Le driver DNP ignore le byte 282 si la section SMTJ est vide ;
+    #     le per-user DEVMODE (HKCU) prend priorité et contient le bon SMTJ.
+    _modify_hkcu_devmode(printer_name, activate=True)
+
+    # 3. Attendre que le PS1 ait fini de redémarrer le spooler AVANT d'appeler
+    #    SetCutterMode : le redémarrage du spooler remet l'imprimante en mode
+    #    standard, donc le call hardware doit venir APRÈS, pas avant.
+    _wait_ps1_done(timeout=15)
+
+    # 4. Hardware DLL (après spooler redémarré)
     _set_hardware_cutter(printer_port, CMODE_2INCHCUT)
 
-    # 4. Relancer dslrBooth
+    # 5. Relancer dslrBooth
     if was_running:
         _launch_dslrbooth()
 
@@ -494,16 +625,22 @@ def desactiver_coupe():
     # 0. Fermer dslrBooth AVANT
     was_running = _restart_dslrbooth()
 
-    # 1. Registre
+    # 1. Registre HKLM via PS1 admin (async)
     _modify_registry(printer_name, activate=False)
 
     # 2. dslrBooth XML
     _modify_dslrbooth(activate=False)
 
-    # 3. Hardware DLL
+    # 2b. HKCU DevModePerUser — même logique qu'à l'activation
+    _modify_hkcu_devmode(printer_name, activate=False)
+
+    # 3. Attendre fin du PS1 (spooler redémarré) avant d'appeler SetCutterMode
+    _wait_ps1_done(timeout=15)
+
+    # 4. Hardware DLL (après spooler redémarré)
     _set_hardware_cutter(printer_port, CMODE_STANDARD)
 
-    # 4. Relancer dslrBooth
+    # 5. Relancer dslrBooth
     if was_running:
         _launch_dslrbooth()
 

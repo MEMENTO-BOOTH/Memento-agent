@@ -351,33 +351,43 @@ class SettingsWidget(QWidget):
     def _on_toggle_coupe(self, event):
         toggle = self._ref_imp["toggle_coupe"]
         toggle.mousePressEvent_orig(event)
+        activate = toggle.is_on()
 
-        # Utiliser le module monitoring/coupe_2pouces
-        from monitoring.coupe_2pouces import activer_coupe, desactiver_coupe
         from ui_components import toast
-        if toggle.is_on():
-            activer_coupe()
-            toast("Coupe 2 pouces activée", "success")
-        else:
-            desactiver_coupe()
-            toast("Coupe 2 pouces désactivée")
+        toast("Coupe 2 pouces en cours..." if activate else "Désactivation en cours...", "warning")
+        toggle.setEnabled(False)
 
-        # Mettre à jour le heartbeat dans Supabase
-        if self._borne_id:
-            mode = "Coupe activée" if toggle.is_on() else "Coupe désactivée"
-            self._run(
-                supa.supabase_patch_heartbeat, lambda ok: None,
-                self._borne_id, {"mode_coupe": mode},
-            )
-            # Résoudre / créer l'alerte coupe directement
-            from monitoring.alertes.alertes_monitor import _resoudre_alertes, _creer_alerte, _alerte_deja_ouverte
-            if toggle.is_on():
-                _resoudre_alertes(self._borne_id, ["coupe_incoherente"])
+        def _do_coupe():
+            from monitoring.coupe_2pouces import activer_coupe, desactiver_coupe
+            if activate:
+                activer_coupe()
             else:
-                if not _alerte_deja_ouverte(self._borne_id, "coupe_incoherente"):
-                    nom_imp = self._ref_imp["lbl_nom"].text() or "imprimante"
-                    _creer_alerte(self._borne_id, "coupe_incoherente", "imprimante",
-                                  f"Coupe 2 pouces désactivée sur {nom_imp}.", "warning")
+                desactiver_coupe()
+
+        def _on_done(_):
+            toggle.setEnabled(True)
+            from ui_components import toast as _toast
+            if activate:
+                _toast("Coupe 2 pouces activée", "success")
+            else:
+                _toast("Coupe 2 pouces désactivée")
+            # Heartbeat + alertes
+            if self._borne_id:
+                mode = "Coupe activée" if activate else "Coupe désactivée"
+                self._run(
+                    supa.supabase_patch_heartbeat, lambda ok: None,
+                    self._borne_id, {"mode_coupe": mode},
+                )
+                from monitoring.alertes.alertes_monitor import _resoudre_alertes, _creer_alerte, _alerte_deja_ouverte
+                if activate:
+                    _resoudre_alertes(self._borne_id, ["coupe_incoherente"])
+                else:
+                    if not _alerte_deja_ouverte(self._borne_id, "coupe_incoherente"):
+                        nom_imp = self._ref_imp["lbl_nom"].text() or "imprimante"
+                        _creer_alerte(self._borne_id, "coupe_incoherente", "imprimante",
+                                      f"Coupe 2 pouces désactivée sur {nom_imp}.", "warning")
+
+        self._run(_do_coupe, _on_done)
 
     def _on_toggle_maintenance(self, event):
         toggle = self._ref_sys["toggle_maint"]
