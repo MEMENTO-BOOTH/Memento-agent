@@ -19,8 +19,14 @@ import supabase_client as supa
 CODE_CHARS = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"
 CODE_LENGTH = 7
 
-# Fenêtre de temps (en secondes) pour chercher les Originals
-ORIGINALS_TIME_WINDOW = 60
+# Fenêtre de temps (en secondes) pour chercher les Originals avant un print.
+# Une session typique = 4 photos prises sur ~30s + un ecran preview/select
+# pouvant durer 30-90s, puis print. La premiere photo peut donc avoir un
+# mtime > 60s avant le print → elle etait perdue avec l'ancienne fenetre.
+# 180s = couverture confortable pour la quasi-totalite des sessions sans
+# risque significatif de cross-contamination (deux sessions completes en
+# moins de 3 min sur la meme borne est rare).
+ORIGINALS_TIME_WINDOW = 180
 
 # Re-scan apres l'envoi initial : rattrape les originals movés en retard
 # par dslrbooth (race condition entre l'ecriture du print_log et le move des
