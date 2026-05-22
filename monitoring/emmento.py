@@ -201,11 +201,31 @@ def _generer_image_code(code):
 
 
 def _get_bar_from_path(chemin):
+    """Extrait le nom du bar (dossier event sous DSLRBOOTH_BASE) depuis un
+    chemin dslrBooth (typiquement le chemin d'un print ou d'un original).
+
+    Retourne le nom du bar en cas de succes, ou **None** si le parsing
+    echoue (path qui ne matche pas DSLRBOOTH_BASE, drive letter parasite,
+    fragment vide, etc.). L'appelant doit alors fallback sur le bar
+    courant (nom_lieu via _default_bar) plutot que d'inserer un artefact
+    comme "C:" en base.
+
+    Match insensible a la case (Windows : "C:\\dslrBooth" == "c:\\dslrbooth")."""
+    if not chemin:
+        return None
     try:
-        relatif = chemin.replace(DSLRBOOTH_BASE + "\\", "")
-        return relatif.split("\\")[0]
+        prefix = (DSLRBOOTH_BASE + "\\").lower()
+        if not chemin.lower().startswith(prefix):
+            return None
+        relatif = chemin[len(DSLRBOOTH_BASE) + 1:]
+        bar = relatif.split("\\")[0].strip()
+        # Filtrer les artefacts : vide, "inconnu", drive letter (C:, D:, etc.),
+        # ou tout ce qui contient ":" (impossible dans un nom de dossier Windows).
+        if not bar or bar.lower() == "inconnu" or ":" in bar:
+            return None
+        return bar
     except Exception:
-        return "inconnu"
+        return None
 
 
 def _trouver_originals(bar, timestamp_print, timestamp_max=None):
@@ -454,7 +474,13 @@ class EmentoWatcher:
             return
 
         self._etat["photos"].append(chemin)
-        self._etat["bar"] = _get_bar_from_path(chemin)
+        # On override le bar UNIQUEMENT si le parsing du path a reussi.
+        # Sinon on garde le default (nom_lieu via _default_bar) pose au
+        # session start — evite de polluer la row avec "C:" ou autre
+        # artefact de parsing quand le path ne matche pas DSLRBOOTH_BASE.
+        parsed_bar = _get_bar_from_path(chemin)
+        if parsed_bar:
+            self._etat["bar"] = parsed_bar
         self._etat["originals"] = _trouver_originals(
             self._etat["bar"], time.time()
         )
