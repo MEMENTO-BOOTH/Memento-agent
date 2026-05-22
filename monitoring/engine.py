@@ -99,7 +99,7 @@ class MonitoringEngine(QThread):
         set_on_alerte_critique(self._on_critique)
 
         # Initialiser e-memento watcher + drive backup
-        self._emmento = EmentoWatcher(self._borne_id)
+        self._emmento = EmentoWatcher(self._borne_id, self._nom_lieu)
         self._cash = CashInterfaceWatcher(self._borne_id)
         self._printer_counter = PrinterCounterWatcher(
             self._borne_id,

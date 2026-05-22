@@ -229,7 +229,20 @@ def _envoyer_supabase(session_id, bar, timestamp, photos, code, originals, borne
     On envoie uniquement les basenames a Supabase : le workflow n8n cote
     serveur cherche les fichiers sur Google Drive par nom exact, le fullPath
     Windows ne lui sert a rien. L'agent garde le fullPath en interne pour
-    pouvoir lire les fichiers sur disque (rescan, drive backup, etc.)."""
+    pouvoir lire les fichiers sur disque (rescan, drive backup, etc.).
+
+    Garde-fou : on n'insere PAS de row avec bar="inconnu" ou vide. Le n8n
+    n'a rien a en faire et ca pollue la table. Si la session a un vrai print
+    plus tard, l'event print rappellera cette fonction avec un bar valide
+    (UPSERT creera la row a ce moment-la)."""
+    if not bar or bar == "inconnu":
+        print(f"[EMMENTO] Insert skippe : bar inconnu pour session {session_id} (code {code})")
+        try:
+            import activity_logger as alog
+            alog.log_generic("EMMENTO", f"Insert skippe, bar inconnu (session {session_id}, code {code})")
+        except Exception:
+            pass
+        return False
     data = {
         "session_id": session_id,
         "code": code,
@@ -273,15 +286,20 @@ def _envoyer_supabase(session_id, bar, timestamp, photos, code, originals, borne
 class EmentoWatcher:
     """Watcher e-memento — tourne dans le thread de monitoring."""
 
-    def __init__(self, borne_id):
+    def __init__(self, borne_id, nom_lieu=None):
         self._borne_id = borne_id
+        # nom_lieu = nom du bar configure sur la borne (lu depuis Supabase au
+        # boot du monitoring). Sert de default pour le champ "bar" quand on
+        # ne peut pas encore le deduire du path d'un print dslrBooth.
+        # Evite les sessions orphelines avec bar="inconnu" en base.
+        self._nom_lieu = nom_lieu or None
         self._start_time = datetime.now()
         self._etat = {
             "session_id": None,
             "code": "",
             "photos": [],
             "originals": [],
-            "bar": "inconnu",
+            "bar": self._default_bar(),
             "timestamp": None,
         }
         # session_id -> {bar, print_ts, code, timestamp, photos,
@@ -299,6 +317,13 @@ class EmentoWatcher:
         except Exception:
             pass
 
+    def _default_bar(self):
+        """Bar a utiliser par defaut quand aucun print n'a encore revele le
+        path Windows (donc le bar). On utilise le nom_lieu configure sur la
+        borne, sinon "inconnu" en dernier recours (et _envoyer_supabase
+        skippera l'insert pour eviter de polluer la table)."""
+        return self._nom_lieu or "inconnu"
+
     def _charger_session_courante(self):
         """Lit les dernières lignes du log pour trouver la session active.
         Génère un code et l'envoie dans Supabase pour que le Print puisse le rattacher."""
@@ -315,13 +340,13 @@ class EmentoWatcher:
                             "code": code,
                             "photos": [],
                             "originals": [],
-                            "bar": "inconnu",
+                            "bar": self._default_bar(),
                             "timestamp": datetime.now().astimezone().isoformat(),
                         }
                         print(f"[EMMENTO] Session en cours récupérée: {session_id} → code: {code}")
                         _generer_image_code(code)
                         _envoyer_supabase(
-                            session_id=session_id, bar="inconnu",
+                            session_id=session_id, bar=self._default_bar(),
                             timestamp=self._etat["timestamp"], photos=[],
                             code=code, originals=[], borne_id=self._borne_id,
                         )
@@ -379,7 +404,7 @@ class EmentoWatcher:
                 "code": code,
                 "photos": [],
                 "originals": [],
-                "bar": "inconnu",
+                "bar": self._default_bar(),
                 "timestamp": datetime.now().astimezone().isoformat(),
             }
             print(f"[EMMENTO] Nouvelle session: {nouveau_id} → code: {code}")
@@ -388,7 +413,7 @@ class EmentoWatcher:
             alog.ui_log(f"Nouvelle session — code {code}")
             _generer_image_code(code)
             _envoyer_supabase(
-                session_id=nouveau_id, bar="inconnu",
+                session_id=nouveau_id, bar=self._default_bar(),
                 timestamp=self._etat["timestamp"], photos=[],
                 code=code, originals=[], borne_id=self._borne_id,
             )
