@@ -3,6 +3,7 @@ Surveille les dossiers dslrBooth et copie les nouvelles photos
 vers Google Drive automatiquement."""
 
 import os
+import glob
 import json
 import time
 import shutil
@@ -37,9 +38,15 @@ DRIVE_ALERTS = {
 DSLRBOOTH_CONFIG = os.path.join(
     os.environ.get("APPDATA", ""), "dslrBooth", "app_settings_2021.json"
 )
-DSLRBOOTH_DB = os.path.join(
-    os.environ.get("APPDATA", ""), "dslrBooth", "database_2025.db"
+# dslrBooth renomme sa DB sqlite chaque annee (database_2025.db,
+# database_2026.db, ...). On resoud dynamiquement le fichier le plus
+# recent pour ne pas casser silencieusement au changement d'annee.
+_DSLRBOOTH_DB_MATCHES = sorted(
+    glob.glob(os.path.join(os.environ.get("APPDATA", ""), "dslrBooth", "database_*.db")),
+    key=os.path.getmtime,
+    reverse=True,
 )
+DSLRBOOTH_DB = _DSLRBOOTH_DB_MATCHES[0] if _DSLRBOOTH_DB_MATCHES else ""
 
 # Vérification fichiers
 TAILLE_MIN_ORIGINAL = 100_000   # 100 Ko

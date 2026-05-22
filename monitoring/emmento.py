@@ -5,6 +5,7 @@ Codes expirés après 2 mois."""
 
 import os
 import re
+import glob
 import json
 import time
 import random
@@ -34,9 +35,15 @@ DSLRBOOTH_LOG = os.path.join(
 DSLRBOOTH_CONFIG = os.path.join(
     os.environ.get("APPDATA", ""), "dslrBooth", "app_settings_2021.json"
 )
-DSLRBOOTH_DB = os.path.join(
-    os.environ.get("APPDATA", ""), "dslrBooth", "database_2025.db"
+# dslrBooth renomme sa DB sqlite chaque annee (database_2025.db,
+# database_2026.db, ...). On resoud dynamiquement le fichier le plus
+# recent pour ne pas casser silencieusement au changement d'annee.
+_DSLRBOOTH_DB_MATCHES = sorted(
+    glob.glob(os.path.join(os.environ.get("APPDATA", ""), "dslrBooth", "database_*.db")),
+    key=os.path.getmtime,
+    reverse=True,
 )
+DSLRBOOTH_DB = _DSLRBOOTH_DB_MATCHES[0] if _DSLRBOOTH_DB_MATCHES else ""
 DSLRBOOTH_BASE = r"C:\dslrBooth"
 QR_OUTPUT = r"C:\SocialBooth\qrcode.png"
 
