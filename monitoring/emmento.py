@@ -224,14 +224,19 @@ def _trouver_originals(bar, timestamp_print, timestamp_max=None):
 
 
 def _envoyer_supabase(session_id, bar, timestamp, photos, code, originals, borne_id):
-    """Envoie dans la table ememento (UPSERT sur session_id)."""
+    """Envoie dans la table ememento (UPSERT sur session_id).
+
+    On envoie uniquement les basenames a Supabase : le workflow n8n cote
+    serveur cherche les fichiers sur Google Drive par nom exact, le fullPath
+    Windows ne lui sert a rien. L'agent garde le fullPath en interne pour
+    pouvoir lire les fichiers sur disque (rescan, drive backup, etc.)."""
     data = {
         "session_id": session_id,
         "code": code,
         "bar": bar,
         "timestamp": timestamp,
-        "photos": json.dumps(photos),
-        "originals": json.dumps(originals or []),
+        "photos": json.dumps([os.path.basename(p) for p in (photos or [])]),
+        "originals": json.dumps([os.path.basename(p) for p in (originals or [])]),
         "statut": "en_attente",
     }
     if borne_id:
