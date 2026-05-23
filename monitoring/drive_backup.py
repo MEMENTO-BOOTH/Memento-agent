@@ -677,8 +677,23 @@ class DriveBackup:
 
         # Niveau A : ecriture locale toutes les HEALTH_CHECK_INTERVAL_SEC
         if now - self._last_local_check_ts >= HEALTH_CHECK_INTERVAL_SEC:
+            # DEBUG : delta reel entre 2 checks (detecte les tick stretches dus
+            # a CPU starvation, blocage Supabase, etc.)
+            delta = now - self._last_local_check_ts if self._last_local_check_ts else 0
             self._last_local_check_ts = now
-            if not self._drive_writable_local():
+            writable = self._drive_writable_local()
+            if not writable:
+                elapsed = (now - self._local_first_failure_ts) if self._local_first_failure_ts else 0
+                try:
+                    import activity_logger as alog
+                    alog.log_generic(
+                        "DRIVE",
+                        f"DEBUG local check #{int(now)} : FAIL "
+                        f"(delta_tick={delta:.1f}s, elapsed_failure={elapsed:.1f}s, "
+                        f"debounce={DRIVE_ALERT_DEBOUNCE_SEC}s)",
+                    )
+                except Exception:
+                    pass
                 # _on_local_failure gere le debounce : 1ere fois = log silencieux,
                 # apres DRIVE_ALERT_DEBOUNCE_SEC de panne persistante = vraie alerte.
                 self._on_local_failure()
@@ -689,13 +704,32 @@ class DriveBackup:
                     self._drive_base = None
                     return
             else:
+                try:
+                    import activity_logger as alog
+                    alog.log_generic(
+                        "DRIVE",
+                        f"DEBUG local check #{int(now)} : OK (delta_tick={delta:.1f}s)",
+                    )
+                except Exception:
+                    pass
                 # Local OK -> reset debounce + resout l'alerte si ouverte
                 self._on_local_success()
 
         # Niveau B : appel API toutes les API_HEALTH_CHECK_INTERVAL_SEC
         if now - self._last_api_check_ts >= API_HEALTH_CHECK_INTERVAL_SEC:
+            delta_api = now - self._last_api_check_ts if self._last_api_check_ts else 0
             self._last_api_check_ts = now
             api_ok = self._drive_api_check()
+            elapsed_cloud = (now - self._cloud_first_failure_ts) if self._cloud_first_failure_ts else 0
+            try:
+                import activity_logger as alog
+                alog.log_generic(
+                    "DRIVE",
+                    f"DEBUG cloud check #{int(now)} : api_ok={api_ok} "
+                    f"(delta_tick={delta_api:.1f}s, elapsed_failure={elapsed_cloud:.1f}s)",
+                )
+            except Exception:
+                pass
             if api_ok is False:
                 # Vrai echec : fichier temoin local present mais absent du cloud.
                 # Debounce 5 min avant la vraie alerte (Twilio SMS).
