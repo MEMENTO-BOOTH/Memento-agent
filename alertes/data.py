@@ -58,6 +58,7 @@ TYPE_TO_ICON = {
     "crash_relance":      "icon_crash_relance.svg",
     "impression_non_delivree": "icon_impression_non_delivree.svg",
     "drive_deconnecte": "icon_drive_deconnecte.svg",
+    "drive_sync_cassee": "icon_drive_deconnecte.svg",
 }
 
 # ─── Mapping code imprimante → type alerte (depuis twilio_1.0.0) ─────────
@@ -98,6 +99,7 @@ TYPE_LABELS = {
     "borne_hors_ligne":   "Borne hors ligne",
     "impression_non_delivree": "Impression non délivrée",
     "drive_deconnecte": "Google Drive déconnecté",
+    "drive_sync_cassee": "Google Drive sync cassée",
 }
 
 

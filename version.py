@@ -1,3 +1,3 @@
 """Version de l'agent — un seul endroit à modifier."""
 
-VERSION = "1.0.20.0"
+VERSION = "1.0.21.0"

@@ -11,7 +11,7 @@ from dashboard import T, DARK_THEME, LIME_GREEN, TEXT_BLACK, TEXT_WHITE, ASSETS_
 from .data import TYPE_TO_ICON, TYPE_LABELS, resolve_alerte, assign_alerte, delete_alerte
 
 # Types visuellement "warning" (orange) — même si Supabase dit "critique"
-_TYPES_WARNING_VISUEL = {"surchauffe", "papier_bas", "disque_bas", "coupe_incoherente", "crash_relance", "borne_hors_ligne", "impression_non_delivree", "drive_deconnecte"}
+_TYPES_WARNING_VISUEL = {"surchauffe", "papier_bas", "disque_bas", "coupe_incoherente", "crash_relance", "borne_hors_ligne", "impression_non_delivree", "drive_deconnecte", "drive_sync_cassee"}
 
 def _gravite_visuelle(alerte):
     """Retourne la gravité visuelle basée sur le type d'alerte."""
