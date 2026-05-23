@@ -60,7 +60,21 @@ TAILLE_MIN_PRINT = 10_000       # 10 Ko
 #            ne pousse plus vers le cloud, cas observe sur La Planque
 #            29/04 : 42 sessions perdues pendant 60h sans alerte).
 HEALTH_CHECK_INTERVAL_SEC = 60
-API_HEALTH_CHECK_INTERVAL_SEC = 300
+API_HEALTH_CHECK_INTERVAL_SEC = 120  # 2 min (reduit de 5 min : on a un debounce maintenant)
+
+# Debounce avant d'envoyer une vraie alerte (Twilio SMS).
+# Sequence : 1ere detection -> log silencieux dans drive.log.
+# Re-check >= DRIVE_ALERT_DEBOUNCE_SEC apres + toujours en panne -> vraie alerte
+# (SMS + page dashboard). Evite les SMS pour les hiccups transitoires
+# (relogin Drive Desktop, basculement reseau, etc.) qui se resolvent seuls.
+DRIVE_ALERT_DEBOUNCE_SEC = 300  # 5 minutes
+
+# Fenetre d'age d'un fichier "temoin" pour le check cloud end-to-end :
+# - trop frais (< 120s) : Drive Desktop n'a peut-etre pas encore eu le temps
+#   de pousser le fichier vers le cloud, faux negatif possible
+# - trop vieux (> 1800s) : moins de signal sur l'etat actuel du sync
+CLOUD_WITNESS_MIN_AGE_SEC = 120
+CLOUD_WITNESS_MAX_AGE_SEC = 1800
 
 # Bug Latina Cafe : sur certaines bornes, les .jpg sont deposes directement
 # a la racine de C:\dslrBooth\ au lieu d'un sous-dossier <event>\Originals\.
@@ -269,6 +283,11 @@ class DriveBackup:
         self._last_api_check_ts = 0.0
         self._drive_root_folder_id = None  # cache, resolu via API au 1er check B
 
+        # Debounce : timestamp de la 1ere detection d'echec, None si tout va bien.
+        # Une alerte ne fire qu'une fois que la panne persiste > DRIVE_ALERT_DEBOUNCE_SEC.
+        self._local_first_failure_ts = None
+        self._cloud_first_failure_ts = None
+
         # Scan racine (bug Latina Cafe) : pour chaque .jpg vu a la racine,
         # on note l'instant de la 1ere observation. Si le fichier persiste
         # > RACINE_PERSIST_SEC, c'est qu'il ne sera pas move par dslrbooth
@@ -285,7 +304,8 @@ class DriveBackup:
             import activity_logger as alog
             alog.log_drive_inaccessible()
             alog.ui_log("Google Drive inaccessible")
-            self._creer_alerte_drive()
+            # Debounce : on log mais on n'alerte pas immediatement
+            self._on_local_failure()
             return
         # Construire le chemin specifique de cette borne et tester l'ecriture
         # SUR CE CHEMIN (pas sur la racine). Si le sous-dossier est en lecture
@@ -301,12 +321,86 @@ class DriveBackup:
             print(f"[DRIVE] {drive_base} en lecture seule ou inaccessible: {e}")
             import activity_logger as alog
             alog.ui_log("Google Drive déconnecté ou en lecture seule")
-            self._creer_alerte_drive()
+            self._on_local_failure()
             return
-        # Tout OK — résoudre l'alerte si elle était ouverte
+        # Tout OK — résoudre l'alerte si elle était ouverte + reset debounce
         self._drive_base = drive_base
-        self._resoudre_alerte_drive()
+        self._on_local_success()
         print(f"[DRIVE] Base: {self._drive_base}")
+
+    # --- Debounce helpers : evitent les SMS pour les hiccups transitoires ----
+
+    def _on_local_failure(self):
+        """Une detection d'echec local. La 1ere fois : log silencieux, pas
+        d'alerte. Si persiste > DRIVE_ALERT_DEBOUNCE_SEC : vraie alerte."""
+        now = time.time()
+        if self._local_first_failure_ts is None:
+            self._local_first_failure_ts = now
+            try:
+                import activity_logger as alog
+                alog.log_generic(
+                    "DRIVE",
+                    f"Health check local FAIL #1 — debounce {DRIVE_ALERT_DEBOUNCE_SEC}s avant alerte",
+                )
+            except Exception:
+                pass
+        elif now - self._local_first_failure_ts >= DRIVE_ALERT_DEBOUNCE_SEC:
+            try:
+                import activity_logger as alog
+                alog.log_generic(
+                    "DRIVE",
+                    "Health check local FAIL persistant — alerte declenchee",
+                )
+            except Exception:
+                pass
+            self._creer_alerte_drive("local_write_failed")
+
+    def _on_local_success(self):
+        """Le local marche. Reset le debounce et resoud l'alerte si ouverte."""
+        if self._local_first_failure_ts is not None:
+            try:
+                import activity_logger as alog
+                alog.log_generic("DRIVE", "Health check local OK — debounce reset")
+            except Exception:
+                pass
+        self._local_first_failure_ts = None
+        self._resoudre_alerte_drive("local_write_failed")
+
+    def _on_cloud_failure(self):
+        """Une detection d'echec cloud (sync silencieusement cassee). 1ere fois :
+        log silencieux. Si persiste > DRIVE_ALERT_DEBOUNCE_SEC : vraie alerte."""
+        now = time.time()
+        if self._cloud_first_failure_ts is None:
+            self._cloud_first_failure_ts = now
+            try:
+                import activity_logger as alog
+                alog.log_generic(
+                    "DRIVE",
+                    f"Health check cloud FAIL #1 — debounce {DRIVE_ALERT_DEBOUNCE_SEC}s avant alerte",
+                )
+            except Exception:
+                pass
+        elif now - self._cloud_first_failure_ts >= DRIVE_ALERT_DEBOUNCE_SEC:
+            try:
+                import activity_logger as alog
+                alog.log_generic(
+                    "DRIVE",
+                    "Health check cloud FAIL persistant — alerte declenchee",
+                )
+            except Exception:
+                pass
+            self._creer_alerte_drive("cloud_sync_silently_broken")
+
+    def _on_cloud_success(self):
+        """Le cloud marche. Reset le debounce et resoud l'alerte si ouverte."""
+        if self._cloud_first_failure_ts is not None:
+            try:
+                import activity_logger as alog
+                alog.log_generic("DRIVE", "Health check cloud OK — debounce reset")
+            except Exception:
+                pass
+        self._cloud_first_failure_ts = None
+        self._resoudre_alerte_drive("cloud_sync_silently_broken")
 
     def _creer_alerte_drive(self, reason="local_write_failed"):
         """Cree l'alerte correspondant a `reason` si pas deja ouverte en base.
@@ -376,17 +470,55 @@ class DriveBackup:
             print(f"[DRIVE] Health check local FAIL: {e}")
             return False
 
+    def _find_witness_file(self):
+        """Cherche un fichier 'temoin' local pour le check end-to-end : un
+        .jpg present dans <drive_base>/.../Originals/ ou /Prints/ dont le
+        mtime est dans [CLOUD_WITNESS_MIN_AGE_SEC, CLOUD_WITNESS_MAX_AGE_SEC].
+
+        Pourquoi cette fenetre :
+        - Trop frais (< 2 min) : Drive Desktop n'a peut-etre pas eu le temps
+          de pousser le fichier vers le cloud, faux negatif possible.
+        - Trop vieux (> 30 min) : ne reflete pas l'etat actuel du sync.
+
+        Retourne le nom du fichier (basename) ou None si rien a verifier.
+        """
+        if not self._drive_base or not os.path.isdir(self._drive_base):
+            return None
+        now = time.time()
+        min_mtime = now - CLOUD_WITNESS_MAX_AGE_SEC
+        max_mtime = now - CLOUD_WITNESS_MIN_AGE_SEC
+        try:
+            for root, _dirs, files in os.walk(self._drive_base):
+                for f in files:
+                    if not f.lower().endswith((".jpg", ".jpeg", ".png")):
+                        continue
+                    try:
+                        mtime = os.path.getmtime(os.path.join(root, f))
+                    except OSError:
+                        continue
+                    if min_mtime <= mtime <= max_mtime:
+                        return f
+        except Exception:
+            pass
+        return None
+
     def _drive_api_check(self):
-        """Niveau B : appel API Google Drive via le Service Account.
+        """Niveau B (vrai test end-to-end) : verifie qu'un fichier .jpg local
+        recent est bien present dans le cloud Drive via l'API du Service
+        Account. Si oui = sync OK. Si non = sync silencieusement cassee
+        (Drive Desktop accepte les ecritures locales mais ne pousse plus
+        vers le cloud — scenario observe sur La Planque / Comptoir des copains).
+
         Le SA doit avoir un acces 'Lecteur' sur le dossier
-        Mon Drive\\dslrBooth\\<nom_lieu>\\ partage manuellement.
+        Mon Drive/dslrBooth/<nom_lieu>/ partage manuellement.
 
         Retourne :
-          - True si l'API repond et le dossier est accessible (cloud OK)
-          - False si l'API echoue (sync silencieusement cassee)
-          - None si non configure (GOOGLE_SA_JSON absent ou libs google
-            absentes) — le niveau B est skipe gracieusement, le niveau A
-            continue de tourner.
+          - True  : fichier temoin trouve a la fois en local ET dans le cloud
+          - False : fichier temoin present en local mais absent du cloud
+                    (= sync casse)
+          - None  : pas de fichier temoin a verifier (borne inactive recemment),
+                    ou config SA absente, ou libs google absentes, ou exception
+                    sur l'appel API — on n'a pas l'info, on skip gracieusement.
         """
         sa_json_str = _get_sa_json()
         if not sa_json_str:
@@ -396,6 +528,15 @@ class DriveBackup:
             from googleapiclient.discovery import build
         except ImportError:
             return None
+
+        witness_name = self._find_witness_file()
+        if not witness_name:
+            # Pas de fichier .jpg recent (entre 2 et 30 min) — rien a verifier.
+            # Soit la borne est inactive, soit on vient de demarrer. On skip
+            # silencieusement (ne reset PAS le debounce — un eventuel echec
+            # en cours reste actif).
+            return None
+
         try:
             creds = service_account.Credentials.from_service_account_info(
                 json.loads(sa_json_str),
@@ -403,24 +544,30 @@ class DriveBackup:
             )
             service = build("drive", "v3", credentials=creds, cache_discovery=False)
 
-            if not self._drive_root_folder_id:
-                self._drive_root_folder_id = self._resolve_root_folder_id(service)
-                if not self._drive_root_folder_id:
-                    # Pas de dossier partage avec le SA — rien a check pour cette borne
-                    return None
-
-            # Liste les enfants : un appel reussi = cloud accessible
-            service.files().list(
-                q=f"'{self._drive_root_folder_id}' in parents and trashed=false",
-                pageSize=5,
+            # Query Drive API pour le fichier temoin par nom exact, scope SA
+            # (limite a tout ce que le SA peut voir = sous-arbre <nom_lieu>).
+            # Si le sync marche, le fichier doit avoir ete pousse vers le cloud
+            # et donc etre listable via l'API.
+            results = service.files().list(
+                q=f"name='{witness_name}' and trashed=false",
+                pageSize=1,
                 fields="files(id,name)",
                 supportsAllDrives=False,
                 includeItemsFromAllDrives=False,
             ).execute()
-            return True
-        except Exception as e:
-            print(f"[DRIVE] Health check API FAIL: {e}")
+            if results.get("files"):
+                return True
+            print(
+                f"[DRIVE] Health check API FAIL: fichier temoin '{witness_name}' "
+                f"present en local mais introuvable dans le cloud"
+            )
             return False
+        except Exception as e:
+            print(f"[DRIVE] Health check API erreur: {e}")
+            # Exception sur l'appel API : on ne sait pas si c'est cassee ou
+            # juste un blip reseau. On skip et on garde le debounce en cours
+            # (si y'en a un). N'augmente PAS le compteur d'echec.
+            return None
 
     def _resolve_root_folder_id(self, service):
         """Cherche le folder Drive 'dslrBooth/<nom_lieu>' partage avec le SA.
@@ -532,35 +679,35 @@ class DriveBackup:
         if now - self._last_local_check_ts >= HEALTH_CHECK_INTERVAL_SEC:
             self._last_local_check_ts = now
             if not self._drive_writable_local():
-                import activity_logger as alog
-                alog.log_generic(
-                    "DRIVE",
-                    "Health check local FAIL — Drive Desktop ne repond pas",
-                )
-                self._drive_base = None
-                self._creer_alerte_drive("local_write_failed")
-                return
+                # _on_local_failure gere le debounce : 1ere fois = log silencieux,
+                # apres DRIVE_ALERT_DEBOUNCE_SEC de panne persistante = vraie alerte.
+                self._on_local_failure()
+                # Si l'alerte a vraiment ete creee (debounce expire), on reset
+                # drive_base pour forcer un re-init au prochain tick.
+                if (self._local_first_failure_ts is not None and
+                        now - self._local_first_failure_ts >= DRIVE_ALERT_DEBOUNCE_SEC):
+                    self._drive_base = None
+                    return
             else:
-                # Local OK -> resoudre l'alerte 'drive_deconnecte' si elle etait ouverte
-                self._resoudre_alerte_drive("local_write_failed")
+                # Local OK -> reset debounce + resout l'alerte si ouverte
+                self._on_local_success()
 
         # Niveau B : appel API toutes les API_HEALTH_CHECK_INTERVAL_SEC
         if now - self._last_api_check_ts >= API_HEALTH_CHECK_INTERVAL_SEC:
             self._last_api_check_ts = now
             api_ok = self._drive_api_check()
             if api_ok is False:
-                # Local marche, mais le cloud ne repond pas -> sync cassee
-                import activity_logger as alog
-                alog.log_generic(
-                    "DRIVE",
-                    "Health check API FAIL — sync vers cloud cassee",
-                )
-                self._creer_alerte_drive("cloud_sync_silently_broken")
+                # Vrai echec : fichier temoin local present mais absent du cloud.
+                # Debounce 5 min avant la vraie alerte (Twilio SMS).
+                self._on_cloud_failure()
                 # Ne pas reset _drive_base : on continue a copier en local
                 # en attendant que le cloud reparte.
             elif api_ok is True:
-                self._resoudre_alerte_drive("cloud_sync_silently_broken")
-            # api_ok is None -> SA non configure, on skip silencieusement
+                # Vrai succes : fichier temoin trouve en local ET dans le cloud.
+                self._on_cloud_success()
+            # api_ok is None -> SA non configure, pas de fichier temoin recent,
+            # ou exception API : on n'a pas l'info, on ne touche pas au debounce
+            # en cours (un echec persistant continue de courir).
 
         # Rattrapage des fichiers a la racine de C:\dslrBooth\ (bug Latina Cafe)
         self._scan_racine()
