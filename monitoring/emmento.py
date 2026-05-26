@@ -8,7 +8,7 @@ import re
 import glob
 import json
 import time
-import random
+import secrets
 import string
 from datetime import datetime
 
@@ -96,22 +96,114 @@ def _load_code_config():
     return cfg
 
 
-def _generer_code_unique(borne_id):
-    """Génère un code court de 7 caractères, vérifie l'unicité dans Supabase."""
-    for _ in range(10):  # 10 tentatives max
-        code = "".join(random.choices(CODE_CHARS, k=CODE_LENGTH))
+def _reserver_code(borne_id, session_id, bar, timestamp):
+    """Reserve atomiquement un code unique dans Supabase.
+
+    **GARANTIE FORTE** : cette fonction retourne TOUJOURS un code valide
+    et tente toujours de le persister en base. Le client a paye, il doit
+    avoir son ticket — aucun cas ou on retourne None.
+
+    Strategie en cascade :
+      1. 5 tentatives avec code 7 chars (alphabet CODE_CHARS = 30 chars
+         sans ambiguite, generes via ``secrets.choice``). INSERT direct
+         (pas UPSERT) → si conflit PK 409, regenere et retry.
+      2. Fallback 10 chars (30^10 = 5.9e14 combos, collision astronomique).
+         Log un WARNING : signe que les 7 chars sont satures.
+      3. Dernier recours : code derive du SHA256(session_id), 12 chars
+         dans le meme alphabet. Unique par construction (session_id est
+         unique par session dslrBooth). Log un ERROR + alerte Supabase.
+
+    Si meme la tentative #3 echoue cote Supabase (probablement Supabase
+    down), on retourne quand meme le code derive — le client a son ticket
+    imprime, l'admin reverra l'event dans les logs."""
+    bar_to_insert = bar or "inconnu"
+
+    def _try_insert(code):
+        data = {
+            "session_id": session_id,
+            "code": code,
+            "bar": bar_to_insert,
+            "timestamp": timestamp,
+            "photos": json.dumps([]),
+            "originals": json.dumps([]),
+            "statut": "en_attente",
+        }
+        if borne_id:
+            data["borne_id"] = borne_id
         try:
-            r = requests.get(
-                f"{supa.SUPABASE_URL}/rest/v1/ememento"
-                f"?code=eq.{code}&select=id&limit=1",
-                headers=supa.HEADERS, timeout=10,
+            r = requests.post(
+                f"{supa.SUPABASE_URL}/rest/v1/ememento",
+                headers=supa.HEADERS_MINIMAL,
+                json=data,
+                timeout=10,
             )
-            if r.status_code == 200 and not r.json():
-                return code  # Code unique trouvé
+            if r.status_code in (200, 201):
+                return True
+            if r.status_code == 409:
+                return False  # conflit PK -> caller retry avec autre code
+            print(f"[EMMENTO] Reservation code: HTTP {r.status_code}: {r.text[:120]}")
+            return False
+        except Exception as e:
+            print(f"[EMMENTO] Reservation code: exception {e}")
+            return False
+
+    # ── Etape 1 : 5 tentatives avec code 7 chars standard ──────────────
+    for tentative in range(1, 6):
+        code = "".join(secrets.choice(CODE_CHARS) for _ in range(CODE_LENGTH))
+        if _try_insert(code):
+            return code
+        print(f"[EMMENTO] Collision code {code} (tentative {tentative}/5), retry")
+
+    # ── Etape 2 : fallback 10 chars (collision quasi nulle) ────────────
+    code_long = "".join(secrets.choice(CODE_CHARS) for _ in range(10))
+    if _try_insert(code_long):
+        try:
+            import activity_logger as alog
+            alog.log_generic(
+                "EMMENTO",
+                f"[WARNING] Code 7-chars sature apres 5 tentatives, "
+                f"fallback 10-chars utilise (session {session_id}, code={code_long})",
+            )
         except Exception:
             pass
-    # Fallback : code aléatoire (probabilité collision ~0 avec 7 chars)
-    return "".join(random.choices(CODE_CHARS, k=CODE_LENGTH))
+        return code_long
+
+    # ── Etape 3 : dernier recours = SHA256(session_id) -> 12 chars ─────
+    # Deterministe et unique par construction (session_id dslrBooth unique).
+    # On tente l'INSERT mais on retourne le code dans TOUS les cas — le ticket
+    # doit etre imprime, meme si Supabase est down.
+    import hashlib
+    h = hashlib.sha256(session_id.encode("utf-8")).digest()
+    n = int.from_bytes(h[:10], "big")  # 80 bits, largement assez pour 12 chars
+    base = len(CODE_CHARS)
+    chars_list = []
+    for _ in range(12):
+        chars_list.append(CODE_CHARS[n % base])
+        n //= base
+    code_hash = "".join(chars_list)
+    inserted = _try_insert(code_hash)
+    try:
+        import activity_logger as alog
+        alog.log_generic(
+            "EMMENTO",
+            f"[ERROR] Fallback 10-chars echoue, dernier recours hash session_id "
+            f"utilise (session {session_id}, code={code_hash}, "
+            f"insert_ok={inserted})",
+        )
+    except Exception:
+        pass
+    try:
+        from monitoring.alertes.alertes_monitor import _creer_alerte
+        _creer_alerte(
+            borne_id,
+            "code_generation_failed",
+            "ememento",
+            "Fallback hash session_id utilise (saturation severe ou Supabase down).",
+            "critique",
+        )
+    except Exception:
+        pass
+    return code_hash
 
 
 def _expirer_anciens_codes():
@@ -359,7 +451,9 @@ class EmentoWatcher:
 
     def _charger_session_courante(self):
         """Lit les dernières lignes du log pour trouver la session active.
-        Génère un code et l'envoie dans Supabase pour que le Print puisse le rattacher."""
+        Réserve atomiquement un code et l'enregistre dans Supabase. La
+        fonction ``_reserver_code`` garantit toujours un code valide
+        (cascade 7→10→hash) — le ticket est imprimé dans tous les cas."""
         try:
             with open(DSLRBOOTH_LOG, "r", encoding="utf-8", errors="ignore") as f:
                 lignes = f.readlines()
@@ -367,22 +461,19 @@ class EmentoWatcher:
                     m = RE_SESSION.search(ligne)
                     if m:
                         session_id = m.group(1)
-                        code = _generer_code_unique(self._borne_id)
+                        bar = self._default_bar()
+                        timestamp = datetime.now().astimezone().isoformat()
+                        code = _reserver_code(self._borne_id, session_id, bar, timestamp)
                         self._etat = {
                             "session_id": session_id,
                             "code": code,
                             "photos": [],
                             "originals": [],
-                            "bar": self._default_bar(),
-                            "timestamp": datetime.now().astimezone().isoformat(),
+                            "bar": bar,
+                            "timestamp": timestamp,
                         }
                         print(f"[EMMENTO] Session en cours récupérée: {session_id} → code: {code}")
                         _generer_image_code(code)
-                        _envoyer_supabase(
-                            session_id=session_id, bar=self._default_bar(),
-                            timestamp=self._etat["timestamp"], photos=[],
-                            code=code, originals=[], borne_id=self._borne_id,
-                        )
                         return
         except Exception:
             pass
@@ -431,25 +522,22 @@ class EmentoWatcher:
             nouveau_id = m.group(1)
             if nouveau_id == self._etat.get("session_id"):
                 return
-            code = _generer_code_unique(self._borne_id)
+            bar = self._default_bar()
+            timestamp = datetime.now().astimezone().isoformat()
+            code = _reserver_code(self._borne_id, nouveau_id, bar, timestamp)
             self._etat = {
                 "session_id": nouveau_id,
                 "code": code,
                 "photos": [],
                 "originals": [],
-                "bar": self._default_bar(),
-                "timestamp": datetime.now().astimezone().isoformat(),
+                "bar": bar,
+                "timestamp": timestamp,
             }
             print(f"[EMMENTO] Nouvelle session: {nouveau_id} → code: {code}")
             import activity_logger as alog
             alog.log_session(nouveau_id, code, "")
             alog.ui_log(f"Nouvelle session — code {code}")
             _generer_image_code(code)
-            _envoyer_supabase(
-                session_id=nouveau_id, bar=self._default_bar(),
-                timestamp=self._etat["timestamp"], photos=[],
-                code=code, originals=[], borne_id=self._borne_id,
-            )
             return
 
         # Print détecté — essayer ancien format puis nouveau
