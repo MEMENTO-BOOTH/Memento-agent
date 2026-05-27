@@ -96,29 +96,53 @@ def _load_code_config():
     return cfg
 
 
+def _fetch_existing_code(session_id):
+    """Recupere le code deja attribue a une session_id en base. Utilise quand
+    l'INSERT echoue avec un conflit sur session_id (= session deja inseree
+    lors d'un run precedent de l'agent : restart, auto-update, etc.).
+
+    Retourne le code ou None si la requete echoue (Supabase down, etc.)."""
+    try:
+        r = requests.get(
+            f"{supa.SUPABASE_URL}/rest/v1/ememento"
+            f"?session_id=eq.{session_id}&select=code&limit=1",
+            headers=supa.HEADERS, timeout=10,
+        )
+        if r.status_code == 200 and r.json():
+            return r.json()[0].get("code")
+    except Exception:
+        pass
+    return None
+
+
 def _reserver_code(borne_id, session_id, bar, timestamp):
-    """Reserve atomiquement un code unique dans Supabase.
+    """Reserve atomiquement un code unique dans Supabase. Retourne TOUJOURS
+    un code valide — le client a paye, il doit avoir son ticket.
 
-    **GARANTIE FORTE** : cette fonction retourne TOUJOURS un code valide
-    et tente toujours de le persister en base. Le client a paye, il doit
-    avoir son ticket — aucun cas ou on retourne None.
+    Cascade :
+      1. 5 tentatives 7-chars (``secrets.choice``, alphabet CODE_CHARS).
+         INSERT direct. Si 409 sur ``code`` -> retry avec autre code.
+         Si 409 sur ``session_id`` -> session deja en base (restart agent),
+         on GET son code existant et on le retourne (comportement normal,
+         silencieux).
+      2. Fallback 10-chars (30^10 combos, collision astronomique).
+      3. Dernier recours : SHA256(session_id) -> 12 chars deterministe,
+         unique par construction. INSERT tente mais code retourne dans
+         tous les cas.
 
-    Strategie en cascade :
-      1. 5 tentatives avec code 7 chars (alphabet CODE_CHARS = 30 chars
-         sans ambiguite, generes via ``secrets.choice``). INSERT direct
-         (pas UPSERT) → si conflit PK 409, regenere et retry.
-      2. Fallback 10 chars (30^10 = 5.9e14 combos, collision astronomique).
-         Log un WARNING : signe que les 7 chars sont satures.
-      3. Dernier recours : code derive du SHA256(session_id), 12 chars
-         dans le meme alphabet. Unique par construction (session_id est
-         unique par session dslrBooth). Log un ERROR + alerte Supabase.
-
-    Si meme la tentative #3 echoue cote Supabase (probablement Supabase
-    down), on retourne quand meme le code derive — le client a son ticket
-    imprime, l'admin reverra l'event dans les logs."""
+    **AUCUNE alerte Supabase n'est creee par cette fonction.** Les
+    comportements bizarres sont juste logues localement dans alertes.log
+    pour diagnostic. La contrainte UNIQUE Postgres sur ``code`` garantit
+    l'unicite des codes attribues aux clientes (PK en base, atomique)."""
     bar_to_insert = bar or "inconnu"
 
     def _try_insert(code):
+        """Tente l'INSERT. Retourne :
+          ("ok",            None) -> code reserve avec succes
+          ("session_dup",   body) -> session_id deja en base, code existant a recuperer
+          ("code_dup",      body) -> code en collision, retry avec autre code
+          ("err",           body) -> autre erreur (reseau, Supabase down, etc.)
+        """
         data = {
             "session_id": session_id,
             "code": code,
@@ -138,68 +162,92 @@ def _reserver_code(borne_id, session_id, bar, timestamp):
                 timeout=10,
             )
             if r.status_code in (200, 201):
-                return True
+                return ("ok", None)
             if r.status_code == 409:
-                return False  # conflit PK -> caller retry avec autre code
-            print(f"[EMMENTO] Reservation code: HTTP {r.status_code}: {r.text[:120]}")
-            return False
+                body = (r.text or "").lower()
+                # PostgREST renvoie "Key (session_id)=(...) already exists." ou
+                # "Key (code)=(...) already exists." dans le champ "details".
+                if "session_id" in body:
+                    return ("session_dup", r.text)
+                return ("code_dup", r.text)
+            return ("err", f"HTTP {r.status_code}: {(r.text or '')[:120]}")
         except Exception as e:
-            print(f"[EMMENTO] Reservation code: exception {e}")
-            return False
+            return ("err", str(e))
 
-    # ── Etape 1 : 5 tentatives avec code 7 chars standard ──────────────
+    # ── Etape 1 : 5 tentatives avec code 7-chars standard ──────────────
     for tentative in range(1, 6):
         code = "".join(secrets.choice(CODE_CHARS) for _ in range(CODE_LENGTH))
-        if _try_insert(code):
+        result, info = _try_insert(code)
+        if result == "ok":
             return code
-        print(f"[EMMENTO] Collision code {code} (tentative {tentative}/5), retry")
+        if result == "session_dup":
+            # Cas normal au restart agent : session deja en base. On lit son
+            # code existant et on le retourne silencieusement.
+            existing = _fetch_existing_code(session_id)
+            if existing:
+                try:
+                    import activity_logger as alog
+                    alog.log_generic(
+                        "EMMENTO",
+                        f"Session {session_id} deja en base (restart agent), "
+                        f"code existant recupere : {existing}",
+                    )
+                except Exception:
+                    pass
+                return existing
+            # Si on n'arrive pas a lire le code existant (Supabase a moitie down),
+            # on continue la cascade — au pire on tombera sur le hash a l'etape 3
+            # qui sera deterministe a partir du session_id.
+            print(f"[EMMENTO] Session {session_id} en base mais GET code echoue, "
+                  f"on continue la cascade")
+            continue
+        # result in ("code_dup", "err") -> retry avec autre code
+        print(f"[EMMENTO] Tentative {tentative}/5 echouee ({result}), retry")
 
-    # ── Etape 2 : fallback 10 chars (collision quasi nulle) ────────────
+    # ── Etape 2 : fallback 10-chars (collision quasi nulle) ────────────
     code_long = "".join(secrets.choice(CODE_CHARS) for _ in range(10))
-    if _try_insert(code_long):
+    result, _ = _try_insert(code_long)
+    if result == "ok":
         try:
             import activity_logger as alog
             alog.log_generic(
                 "EMMENTO",
-                f"[WARNING] Code 7-chars sature apres 5 tentatives, "
-                f"fallback 10-chars utilise (session {session_id}, code={code_long})",
+                f"7-chars sature apres 5 tentatives, fallback 10-chars "
+                f"(session {session_id}, code={code_long})",
             )
         except Exception:
             pass
         return code_long
+    if result == "session_dup":
+        existing = _fetch_existing_code(session_id)
+        if existing:
+            return existing
 
-    # ── Etape 3 : dernier recours = SHA256(session_id) -> 12 chars ─────
-    # Deterministe et unique par construction (session_id dslrBooth unique).
-    # On tente l'INSERT mais on retourne le code dans TOUS les cas — le ticket
-    # doit etre imprime, meme si Supabase est down.
+    # ── Etape 3 : SHA256(session_id) -> 12 chars deterministe ──────────
+    # Cas extreme (Supabase tres degrade). Le code est deterministe, donc
+    # unique par construction puisque session_id est unique par session.
     import hashlib
     h = hashlib.sha256(session_id.encode("utf-8")).digest()
-    n = int.from_bytes(h[:10], "big")  # 80 bits, largement assez pour 12 chars
+    n = int.from_bytes(h[:10], "big")  # 80 bits
     base = len(CODE_CHARS)
     chars_list = []
     for _ in range(12):
         chars_list.append(CODE_CHARS[n % base])
         n //= base
     code_hash = "".join(chars_list)
-    inserted = _try_insert(code_hash)
+    result, _ = _try_insert(code_hash)
+    if result == "session_dup":
+        # Si meme avec le hash on a un session_dup, on lit le code existant
+        existing = _fetch_existing_code(session_id)
+        if existing:
+            return existing
     try:
         import activity_logger as alog
         alog.log_generic(
             "EMMENTO",
-            f"[ERROR] Fallback 10-chars echoue, dernier recours hash session_id "
-            f"utilise (session {session_id}, code={code_hash}, "
-            f"insert_ok={inserted})",
-        )
-    except Exception:
-        pass
-    try:
-        from monitoring.alertes.alertes_monitor import _creer_alerte
-        _creer_alerte(
-            borne_id,
-            "code_generation_failed",
-            "ememento",
-            "Fallback hash session_id utilise (saturation severe ou Supabase down).",
-            "critique",
+            f"Cascade complete : 10-chars + hash echoue (Supabase probablement "
+            f"down). Code hash retourne quand meme : session={session_id}, "
+            f"code={code_hash}, insert_result={result}",
         )
     except Exception:
         pass
