@@ -87,9 +87,21 @@ def _est_dans_horaires(borne_id):
 _alertes_ouvertes = set()
 _alertes_cache_loaded = False
 
+# Snooze de la page rupture : timestamp Unix jusqu'auquel elle ne se re-affiche
+# pas, meme si une alerte critique reste ouverte. Set par snooze_rupture() quand
+# le tech valide le PIN. 0 = pas en snooze. NE PERSISTE PAS au reboot (in-memory),
+# de sorte qu'un reboot reaffiche immediatement la rupture.
+_rupture_snoozed_until = 0.0
+RUPTURE_SNOOZE_SEC = 300  # 5 minutes
+
 
 def _charger_cache_alertes(borne_id):
-    """Charge les alertes ouvertes depuis Supabase une seule fois au démarrage."""
+    """Charge les alertes ouvertes depuis Supabase une seule fois au démarrage.
+
+    Si des alertes visuellement critiques sont encore ouvertes en base, on
+    reaffiche IMMEDIATEMENT la page rupture (sans nouveau SMS — on rappelle
+    juste le callback Qt visuel, pas _creer_alerte). Cela couvre le cas
+    'reboot agent alors qu'une alerte critique etait en cours'."""
     global _alertes_ouvertes, _alertes_cache_loaded
     if _alertes_cache_loaded:
         return
@@ -102,9 +114,41 @@ def _charger_cache_alertes(borne_id):
         if r.status_code == 200:
             _alertes_ouvertes = {a["type"] for a in r.json()}
             print(f"  [CACHE] Alertes ouvertes: {_alertes_ouvertes}")
+            # Re-affichage immediat de la rupture au reboot si critiques en cours.
+            critiques = _alertes_ouvertes - _TYPES_WARNING_VISUEL
+            if critiques and _on_alerte_critique:
+                _on_alerte_critique(True)
+                print(f"  [CACHE] Re-affichage rupture au boot (critiques: {critiques})")
     except Exception:
         pass
     _alertes_cache_loaded = True
+
+
+def snooze_rupture(seconds=RUPTURE_SNOOZE_SEC):
+    """Cache la page rupture pour `seconds` (defaut RUPTURE_SNOOZE_SEC = 5 min).
+
+    Appele par rupture_screen.py quand le tech valide le PIN. NE TOUCHE PAS
+    a l'alerte en base ni au cache _alertes_ouvertes — la page reviendra
+    automatiquement quand le snooze expire SI l'alerte est toujours ouverte
+    (check_rupture_resume), et reste cachee si l'agent a entre-temps detecte
+    que la cause physique a disparu (= _resoudre_alertes appele)."""
+    global _rupture_snoozed_until
+    import time as _t
+    _rupture_snoozed_until = _t.time() + seconds
+    print(f"  [RUPTURE] Snoozee pour {seconds}s par validation PIN")
+
+
+def check_rupture_resume():
+    """Appele tous les ~60s par engine.py. Si le snooze a expire ET qu'il
+    reste au moins une alerte critique en cache, on rappelle le callback
+    pour re-afficher la rupture. Aucun SMS n'est envoye (pas d'INSERT
+    Supabase, juste l'affichage visuel)."""
+    import time as _t
+    if _t.time() < _rupture_snoozed_until:
+        return  # encore en snooze
+    critiques = _alertes_ouvertes - _TYPES_WARNING_VISUEL
+    if critiques and _on_alerte_critique:
+        _on_alerte_critique(True)
 
 
 def _alerte_deja_ouverte(borne_id, type_alerte):

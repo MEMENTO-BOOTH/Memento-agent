@@ -218,6 +218,16 @@ class RuptureScreen(QWidget):
             pin = inp.text()
             user = supa.verifier_pin(pin)
             if user:
+                # Snooze la page rupture : on cache pour 5 min, elle reviendra
+                # automatiquement si l'alerte critique est toujours ouverte
+                # (sans nouveau SMS). Ne touche PAS a la row Supabase ni au cache
+                # d'alertes : seule la disparition reelle de la cause physique
+                # (statut DNP OK, etc.) resout vraiment l'alerte.
+                try:
+                    from monitoring.alertes.alertes_monitor import snooze_rupture
+                    snooze_rupture()
+                except Exception:
+                    pass
                 dlg.accept()
                 self.hide()
                 return

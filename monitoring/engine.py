@@ -154,6 +154,13 @@ class MonitoringEngine(QThread):
                         donnees["dslrbooth_running"] = True
                         donnees["cash_interface_running"] = True
                     verifier_alertes(self._borne_id, self._nom_lieu, donnees)
+                    # Re-afficher la page rupture si snooze PIN expire et alerte
+                    # critique encore ouverte (pas de nouveau SMS, juste visuel)
+                    try:
+                        from .alertes.alertes_monitor import check_rupture_resume
+                        check_rupture_resume()
+                    except Exception as e:
+                        print(f"[RUPTURE] Erreur check resume: {e}")
                 else:
                     print(f"[MONITORING] #{compteur} ⏸ Maintenance — alertes suspendues")
 
