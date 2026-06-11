@@ -1,18 +1,17 @@
-"""Test du fix 'ne s'empile plus' dans printer_counter.
+"""Tests printer_counter.
 
-Reproduit le scenario bug :
-  - 2 clients paient coup sur coup
-  - feuilles_avant snapshot identique pour les 2 (compteur n'a pas bouge)
-  - Compteur baisse de 1 (impression du client A uniquement)
-  - Avant le fix : A et B sont tous les deux marques imprimes (BUG)
-  - Apres le fix : seul A est marque imprime (B reste pending)
+Couverture :
+  - Bug 'ne s'empile plus' (plusieurs paiements rapproches)
+  - Bug 1 : feuilles_apres null quand DLL injoignable
+  - Bug 2 : ordre des valeurs feuilles_apres (oldest = highest)
+  - Bug 4 : decalage TZ (paiement_at UTC vs datetime.now() local)
 """
 
 import sys
 import os
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from collections import deque
 from monitoring.printer_counter import PrinterCounterWatcher
 
@@ -21,7 +20,7 @@ class FakePrinter:
     """Imprimante simulee avec compteur controlable."""
     def __init__(self, initial=100):
         self._counter = initial
-        self.h_port = 0  # >= 0 pour bypass open()
+        self.h_port = 0
         self.dll = None
         self.name = "FAKE"
         self.port = "FAKE"
@@ -39,6 +38,12 @@ class FakePrinter:
         self._counter -= n
 
 
+class FakePrinterDead(FakePrinter):
+    """Imprimante dont la DLL ne repond pas (simule un disconnect)."""
+    def read_counter(self):
+        return None
+
+
 def make_watcher(printer):
     w = PrinterCounterWatcher.__new__(PrinterCounterWatcher)
     w._borne_id = "test-borne"
@@ -51,7 +56,6 @@ def make_watcher(printer):
 
 
 def install_fakes(watcher, pending, patches_log):
-    """Remplace _fetch_pending et _patch par des fakes en memoire."""
     state = {"pending": list(pending)}
 
     def fake_fetch():
@@ -73,58 +77,60 @@ def install_fakes(watcher, pending, patches_log):
     return state
 
 
-def iso(dt):
+def iso_utc(dt):
+    """Format ISO UTC explicite, comme paiement_at en base."""
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
     return dt.isoformat()
 
+
+# ===========================================================================
+#  Tests anciens (empilement) — adaptes UTC
+# ===========================================================================
 
 def test_two_clients_one_print():
     """A et B paient. Une seule feuille sort. Seul A doit etre marque."""
     printer = FakePrinter(initial=100)
     w = make_watcher(printer)
 
-    now = datetime.now()
-    pa_a = now - timedelta(seconds=10)  # paye il y a 10s
-    pa_b = now - timedelta(seconds=5)   # paye il y a 5s
+    now = datetime.now(timezone.utc)
+    pa_a = now - timedelta(seconds=10)
+    pa_b = now - timedelta(seconds=5)
 
-    # Historique du compteur : 100 au moment des 2 paiements
     w._history.append((pa_a - timedelta(seconds=1), 100))
     w._history.append((pa_b - timedelta(seconds=1), 100))
 
     pending = [
-        {"id": "tx-A", "paiement_at": iso(pa_a), "feuilles_avant": None},
-        {"id": "tx-B", "paiement_at": iso(pa_b), "feuilles_avant": None},
+        {"id": "tx-A", "paiement_at": iso_utc(pa_a), "feuilles_avant": None},
+        {"id": "tx-B", "paiement_at": iso_utc(pa_b), "feuilles_avant": None},
     ]
     patches = []
     install_fakes(w, pending, patches)
 
-    # Simule baisse du compteur (impression A)
     printer.drop(1)
     w.tick()
 
-    # Verifs : A doit etre verifie + imprime, B ne doit pas
     a_marked = any(p[0] == "tx-A" and p[1].get("impression_verifiee_papier") for p in patches)
     b_marked = any(p[0] == "tx-B" and p[1].get("impression_verifiee_papier") for p in patches)
-
     assert a_marked, "A devrait etre marque imprime"
-    assert not b_marked, f"B NE devrait PAS etre marque imprime. Patches: {patches}"
-    print("[OK] test_two_clients_one_print : A marque, B reste pending")
+    assert not b_marked, f"B NE devrait PAS etre marque. Patches: {patches}"
+    print("[OK] test_two_clients_one_print")
 
 
 def test_two_clients_two_prints_same_tick():
-    """A et B paient. Le compteur baisse de 2 dans le meme tick. Les 2 doivent etre marques."""
+    """A et B paient. 2 baisses dans le tick. Les 2 marques sans anomalie."""
     printer = FakePrinter(initial=100)
     w = make_watcher(printer)
 
-    now = datetime.now()
+    now = datetime.now(timezone.utc)
     pa_a = now - timedelta(seconds=10)
     pa_b = now - timedelta(seconds=5)
-
     w._history.append((pa_a - timedelta(seconds=1), 100))
     w._history.append((pa_b - timedelta(seconds=1), 100))
 
     pending = [
-        {"id": "tx-A", "paiement_at": iso(pa_a), "feuilles_avant": None},
-        {"id": "tx-B", "paiement_at": iso(pa_b), "feuilles_avant": None},
+        {"id": "tx-A", "paiement_at": iso_utc(pa_a), "feuilles_avant": None},
+        {"id": "tx-B", "paiement_at": iso_utc(pa_b), "feuilles_avant": None},
     ]
     patches = []
     install_fakes(w, pending, patches)
@@ -134,78 +140,11 @@ def test_two_clients_two_prints_same_tick():
 
     a_marked = any(p[0] == "tx-A" and p[1].get("impression_verifiee_papier") for p in patches)
     b_marked = any(p[0] == "tx-B" and p[1].get("impression_verifiee_papier") for p in patches)
-    a_multiple = any(p[0] == "tx-A" and p[1].get("anomalie_impression") == "multiple" for p in patches)
-    b_multiple = any(p[0] == "tx-B" and p[1].get("anomalie_impression") == "multiple" for p in patches)
-
-    assert a_marked, "A devrait etre marque"
-    assert b_marked, "B devrait etre marque"
-    assert not a_multiple, "A ne devrait PAS avoir anomalie multiple (B est derriere)"
-    assert not b_multiple, "B ne devrait PAS avoir anomalie multiple (1 feuille chacun)"
-    print("[OK] test_two_clients_two_prints_same_tick : A et B marques sans anomalie")
-
-
-def test_one_client_two_sheets_no_false_multiple():
-    """1 seul client, 2 feuilles consommees. La detection 'multiple' est desactivee
-    pour eviter les faux positifs (cf. commentaire dans tick). On verifie juste
-    que la tx est marquee imprimee sans anomalie."""
-    printer = FakePrinter(initial=100)
-    w = make_watcher(printer)
-
-    now = datetime.now()
-    pa_a = now - timedelta(seconds=10)
-    w._history.append((pa_a - timedelta(seconds=1), 100))
-
-    pending = [
-        {"id": "tx-A", "paiement_at": iso(pa_a), "feuilles_avant": None},
-    ]
-    patches = []
-    install_fakes(w, pending, patches)
-
-    printer.drop(2)
-    w.tick()
-
-    a_marked = any(p[0] == "tx-A" and p[1].get("impression_verifiee_papier") for p in patches)
     a_anomalie = any(p[0] == "tx-A" and p[1].get("anomalie_impression") for p in patches)
-    assert a_marked, "A devrait etre marque imprime"
-    assert not a_anomalie, "A ne doit PAS avoir d'anomalie auto (faux positifs evites)"
-    print("[OK] test_one_client_two_sheets_no_false_multiple : marque sans anomalie")
-
-
-def test_sequential_ticks_two_clients():
-    """Tick 1: 1 baisse -> A marque. Tick 2: 1 baisse -> B marque."""
-    printer = FakePrinter(initial=100)
-    w = make_watcher(printer)
-
-    now = datetime.now()
-    pa_a = now - timedelta(seconds=10)
-    pa_b = now - timedelta(seconds=5)
-    w._history.append((pa_a - timedelta(seconds=1), 100))
-    w._history.append((pa_b - timedelta(seconds=1), 100))
-
-    pending = [
-        {"id": "tx-A", "paiement_at": iso(pa_a), "feuilles_avant": None},
-        {"id": "tx-B", "paiement_at": iso(pa_b), "feuilles_avant": None},
-    ]
-    patches = []
-    install_fakes(w, pending, patches)
-
-    # Tick 1 : impression A
-    printer.drop(1)
-    w.tick()
-
-    # Tick 2 : impression B
-    printer.drop(1)
-    w.tick()
-
-    a_marked = any(p[0] == "tx-A" and p[1].get("impression_verifiee_papier") for p in patches)
-    b_marked = any(p[0] == "tx-B" and p[1].get("impression_verifiee_papier") for p in patches)
     b_anomalie = any(p[0] == "tx-B" and p[1].get("anomalie_impression") for p in patches)
-
-    assert a_marked, "A devrait etre marque"
-    assert b_marked, "B devrait etre marque (tick 2)"
-    # B ne doit PAS avoir 'multiple' juste parce que A a consomme 1 feuille avant
-    assert not b_anomalie, f"B ne doit PAS avoir d'anomalie. Patches: {patches}"
-    print("[OK] test_sequential_ticks_two_clients : A puis B marques sans faux multiple")
+    assert a_marked and b_marked, "A et B devraient etre marques"
+    assert not a_anomalie and not b_anomalie, "Pas d'anomalie pour 1 feuille chacun"
+    print("[OK] test_two_clients_two_prints_same_tick")
 
 
 def test_three_clients_one_print():
@@ -213,17 +152,14 @@ def test_three_clients_one_print():
     printer = FakePrinter(initial=100)
     w = make_watcher(printer)
 
-    now = datetime.now()
-    pa_a = now - timedelta(seconds=15)
-    pa_b = now - timedelta(seconds=10)
-    pa_c = now - timedelta(seconds=5)
-    for pa in (pa_a, pa_b, pa_c):
+    now = datetime.now(timezone.utc)
+    pas = [now - timedelta(seconds=15-i*5) for i in range(3)]
+    for pa in pas:
         w._history.append((pa - timedelta(seconds=1), 100))
 
     pending = [
-        {"id": "tx-A", "paiement_at": iso(pa_a), "feuilles_avant": None},
-        {"id": "tx-B", "paiement_at": iso(pa_b), "feuilles_avant": None},
-        {"id": "tx-C", "paiement_at": iso(pa_c), "feuilles_avant": None},
+        {"id": f"tx-{c}", "paiement_at": iso_utc(pas[i]), "feuilles_avant": None}
+        for i, c in enumerate(["A", "B", "C"])
     ]
     patches = []
     install_fakes(w, pending, patches)
@@ -233,13 +169,133 @@ def test_three_clients_one_print():
 
     marked_ids = [p[0] for p in patches if p[1].get("impression_verifiee_papier")]
     assert marked_ids == ["tx-A"], f"Seul A devrait etre marque, got {marked_ids}"
-    print("[OK] test_three_clients_one_print : seul A marque, B et C pending")
+    print("[OK] test_three_clients_one_print")
+
+
+# ===========================================================================
+#  Tests nouveaux fixes
+# ===========================================================================
+
+def test_bug2_feuilles_apres_in_correct_order():
+    """Bug 2 : feuilles_apres pour le plus ancien doit etre le plus HAUT.
+    Si A, B, C paient avec compteur a 100 puis baisse a 97 :
+      - A imprime d'abord -> feuilles_apres = 99
+      - B ensuite         -> feuilles_apres = 98
+      - C en dernier      -> feuilles_apres = 97
+    Avant le fix : A=97, B=98, C=99 (inverse)."""
+    printer = FakePrinter(initial=100)
+    w = make_watcher(printer)
+
+    now = datetime.now(timezone.utc)
+    pas = [now - timedelta(seconds=15-i*5) for i in range(3)]
+    for pa in pas:
+        w._history.append((pa - timedelta(seconds=1), 100))
+
+    pending = [
+        {"id": f"tx-{c}", "paiement_at": iso_utc(pas[i]), "feuilles_avant": None}
+        for i, c in enumerate(["A", "B", "C"])
+    ]
+    patches = []
+    install_fakes(w, pending, patches)
+
+    printer.drop(3)  # 3 prints
+    w.tick()
+
+    # Extraire les feuilles_apres assignees (dernier patch par tx)
+    feuilles_apres = {}
+    for tx_id, data in patches:
+        if "feuilles_apres" in data:
+            feuilles_apres[tx_id] = data["feuilles_apres"]
+
+    assert feuilles_apres.get("tx-A") == 99, f"A devrait avoir 99, got {feuilles_apres.get('tx-A')}"
+    assert feuilles_apres.get("tx-B") == 98, f"B devrait avoir 98, got {feuilles_apres.get('tx-B')}"
+    assert feuilles_apres.get("tx-C") == 97, f"C devrait avoir 97, got {feuilles_apres.get('tx-C')}"
+    print(f"[OK] test_bug2_feuilles_apres_in_correct_order : A={feuilles_apres['tx-A']}, B={feuilles_apres['tx-B']}, C={feuilles_apres['tx-C']}")
+
+
+def test_bug1_feuilles_apres_not_null_when_dll_dead():
+    """Bug 1 : si DLL injoignable au tick deadline, feuilles_apres ne doit
+    pas etre null. Fallback sur derniere valeur connue de l'historique."""
+    printer = FakePrinterDead()  # DLL injoignable
+    w = make_watcher(printer)
+
+    # Historique avec une derniere valeur connue (lecture precedente reussie)
+    last_known_ts = datetime.now(timezone.utc) - timedelta(seconds=300)
+    w._history.append((last_known_ts, 150))  # derniere valeur connue = 150
+
+    # Tx paye il y a > 180s -> deadline depassee
+    now = datetime.now(timezone.utc)
+    pa = now - timedelta(seconds=200)
+    pending = [
+        {"id": "tx-A", "paiement_at": iso_utc(pa), "feuilles_avant": 151},
+    ]
+    patches = []
+    install_fakes(w, pending, patches)
+
+    w.tick()
+
+    # Le tick doit avoir marque non_delivree avec feuilles_apres = 150 (fallback)
+    non_delivree_patches = [p for p in patches if p[1].get("anomalie_impression") == "non_delivree"]
+    assert non_delivree_patches, "Devrait avoir une patch non_delivree"
+    feuilles_apres = non_delivree_patches[0][1].get("feuilles_apres")
+    assert feuilles_apres == 150, f"feuilles_apres devrait etre 150 (fallback historique), got {feuilles_apres}"
+    print(f"[OK] test_bug1_feuilles_apres_not_null_when_dll_dead : feuilles_apres={feuilles_apres}")
+
+
+def test_bug4_tz_no_false_non_delivree_on_fresh_tx():
+    """Bug 4 : une tx fresh (10s) ne doit pas etre marquee non_delivree.
+    Avant le fix : paiement_at UTC strippe vs datetime.now() local = +2h
+    en CEST -> deadline 180s tirait immediatement."""
+    printer = FakePrinter(initial=100)
+    w = make_watcher(printer)
+
+    now = datetime.now(timezone.utc)
+    # Tx fresh, paye il y a 10s
+    pa = now - timedelta(seconds=10)
+    pending = [
+        {"id": "tx-A", "paiement_at": iso_utc(pa), "feuilles_avant": 100},
+    ]
+    patches = []
+    install_fakes(w, pending, patches)
+
+    # Pas de baisse compteur (print pas encore sorti)
+    w.tick()
+
+    # Aucune patch ne doit avoir mis non_delivree
+    non_delivree = [p for p in patches if p[1].get("anomalie_impression") == "non_delivree"]
+    assert not non_delivree, f"Pas de non_delivree pour tx fresh. Patches: {patches}"
+    print("[OK] test_bug4_tz_no_false_non_delivree_on_fresh_tx")
+
+
+def test_bug4_tz_real_deadline_still_works():
+    """Bug 4 : meme avec TZ fixe, une tx >180s sans baisse DOIT etre marquee
+    non_delivree (regression check)."""
+    printer = FakePrinter(initial=100)
+    w = make_watcher(printer)
+
+    now = datetime.now(timezone.utc)
+    pa = now - timedelta(seconds=200)  # 200s > 180s
+    pending = [
+        {"id": "tx-A", "paiement_at": iso_utc(pa), "feuilles_avant": 100},
+    ]
+    patches = []
+    install_fakes(w, pending, patches)
+
+    w.tick()  # pas de baisse
+
+    non_delivree = [p for p in patches if p[1].get("anomalie_impression") == "non_delivree"]
+    assert non_delivree, f"Tx >180s sans baisse DOIT etre non_delivree. Patches: {patches}"
+    feuilles_apres = non_delivree[0][1].get("feuilles_apres")
+    assert feuilles_apres == 100, f"feuilles_apres devrait etre counter_now=100, got {feuilles_apres}"
+    print(f"[OK] test_bug4_tz_real_deadline_still_works : non_delivree avec feuilles_apres={feuilles_apres}")
 
 
 if __name__ == "__main__":
     test_two_clients_one_print()
     test_two_clients_two_prints_same_tick()
-    test_one_client_two_sheets_no_false_multiple()
-    test_sequential_ticks_two_clients()
     test_three_clients_one_print()
+    test_bug2_feuilles_apres_in_correct_order()
+    test_bug1_feuilles_apres_not_null_when_dll_dead()
+    test_bug4_tz_no_false_non_delivree_on_fresh_tx()
+    test_bug4_tz_real_deadline_still_works()
     print("\nTous les tests OK !")

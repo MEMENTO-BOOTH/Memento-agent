@@ -139,14 +139,23 @@ class CashInterfaceWatcher:
             )
             if r.status_code == 200 and r.json():
                 tx_id = r.json()[0]["id"]
-                # Vérifier que la transaction est récente (< 5 min)
+                # Verifier que la transaction est recente (< 5 min).
+                # paiement_at est en UTC en base ; keystroke_dt vient du log
+                # CashInterface qui est en heure locale Paris -> on parse en
+                # tz-aware UTC puis on convertit en local naive pour comparer
+                # avec keystroke_dt (sinon decalage de 2h en CEST = on rate
+                # tout = la tx la plus ancienne en file n'est jamais marquee
+                # impression_declenchee=true).
                 if keystroke_dt:
                     tx_time = r.json()[0].get("paiement_at", "")
                     if tx_time:
                         from datetime import timezone
                         try:
-                            tx_dt = datetime.fromisoformat(tx_time.replace("+00:00", ""))
-                            ecart = abs((keystroke_dt - tx_dt).total_seconds())
+                            tx_dt = datetime.fromisoformat(tx_time.replace("Z", "+00:00"))
+                            if tx_dt.tzinfo is None:
+                                tx_dt = tx_dt.replace(tzinfo=timezone.utc)
+                            tx_local = tx_dt.astimezone().replace(tzinfo=None)
+                            ecart = abs((keystroke_dt - tx_local).total_seconds())
                             if ecart > 300:
                                 return
                         except Exception:

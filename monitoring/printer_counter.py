@@ -27,7 +27,7 @@ import os
 import sys
 import ctypes
 import platform
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from collections import deque
 
 import requests
@@ -175,7 +175,10 @@ class PrinterCounterWatcher:
     # --- Lecture compteur & historique -------------------------------
     def _tick_counter(self):
         counter = self._printer.read_counter()
-        now = datetime.now()
+        # Historique en UTC tz-aware : paiement_at est UTC en base, donc le
+        # lookup _counter_at(paiement_at) doit comparer des datetimes dans
+        # le meme referentiel sinon decalage de 2h (= CEST). Cf. Bug 4.
+        now = datetime.now(timezone.utc)
         if counter is not None:
             if self._history and counter < self._history[-1][1] and self._on_print_started:
                 try:
@@ -241,9 +244,17 @@ class PrinterCounterWatcher:
             return False
 
     def _creer_alerte_non_delivree(self, tx_id, paiement_at=None):
-        """Cree une alerte pour chaque paiement non delivre (pas de dedup)."""
+        """Cree une alerte pour chaque paiement non delivre (pas de dedup).
+
+        L'heure affichee dans le message client est en heure locale (Paris)
+        pour que l'admin retrouve directement la transaction sur le ticket
+        ou la borne. paiement_at est tz-aware (UTC) -> on convertit."""
         bar = self._nom_lieu or "la borne"
-        heure = paiement_at.strftime("%H:%M") if paiement_at else datetime.now().strftime("%H:%M")
+        if paiement_at is not None:
+            local = paiement_at.astimezone() if paiement_at.tzinfo else paiement_at
+            heure = local.strftime("%H:%M")
+        else:
+            heure = datetime.now().strftime("%H:%M")
         try:
             import requests
             payload = {
@@ -273,96 +284,136 @@ class PrinterCounterWatcher:
 
     # --- Tick principal ----------------------------------------------
     def tick(self):
-        """Appele toutes les 3 s par MonitoringEngine."""
+        """Appele toutes les 3 s par MonitoringEngine.
+
+        Algo en 3 phases pour eviter plusieurs bugs historiques :
+
+          Phase 1 — Snapshot feuilles_avant manquant pour chaque pending.
+                    On le fait separement de la marquage pour pouvoir
+                    pre-calculer combien de tx vont etre marquees.
+
+          Phase 2 — Decider combien de tx marquer comme imprimees (oldest
+                    first). On itere et incremente un compteur de feuilles
+                    deja attribuees aux plus anciennes : ca empeche le bug
+                    'ne s'empile plus' (toutes les pending marquees d'un coup
+                    a la 1ere baisse) tout en respectant l'ordre FIFO.
+
+          Phase 3 — Marquer : la feuille la plus haute pour la tx la plus
+                    ancienne (Bug 2 fixe — avant, l'ordre etait inverse).
+
+        Bugs traites au passage :
+          - Bug 1 : feuilles_apres = None quand DLL injoignable au tick
+                    deadline -> fallback sur la derniere valeur connue de
+                    l'historique, sinon on omet la cle.
+          - Bug 4 : paiement_at est UTC, datetime.now() etait local Paris
+                    -> ecart gonfle de 2h -> deadline 180s tirait toujours.
+                    Tout est desormais tz-aware en UTC.
+        """
         counter_now = self._tick_counter()
 
         pending = self._fetch_pending_transactions()
         if not pending:
             return
 
-        # nom 'now_local' parce que paiement_at est strippe de sa tz juste apres,
-        # donc on compare 2 datetimes naifs locaux. Cf. bloc clean ci-dessous.
-        now_local = datetime.now()
+        now_utc = datetime.now(timezone.utc)
 
-        # Compteur effectif decremente a chaque tx marquee dans CE tick.
-        # Pourquoi : quand plusieurs clients paient coup sur coup, ils ont tous
-        # le meme `feuilles_avant` (snapshot pris au paiement, le compteur n'a
-        # pas eu le temps de bouger). A la 1ere baisse du compteur, sans cet
-        # accumulateur, TOUTES les pending ont baisse>=1 et sont marquees
-        # imprimees d'un coup -> dashboard "ne s'empile plus" pour le client.
-        # En decrementant le compteur effectif a chaque attribution, seules
-        # les N plus anciennes pending sont marquees, ou N = nb de feuilles
-        # reellement consommees depuis leur snapshot.
-        attributed_in_tick = 0
-
-        for i, tx in enumerate(pending):
-            tx_id = tx["id"]
-            if tx_id in self._resolved:
+        # Parser paiement_at en tz-aware (Bug 4 : avant on strippait la tz et
+        # on comparait a un local naive -> 2h de decalage en CEST).
+        parsed = []
+        for tx in pending:
+            if tx["id"] in self._resolved:
                 continue
             paiement_at_str = tx.get("paiement_at") or ""
             try:
-                # Enlever le timezone pour comparer en heure locale
-                clean = paiement_at_str.replace("Z", "").replace("+00:00", "")
-                if "+" in clean:
-                    clean = clean[:clean.rfind("+")]
+                clean = paiement_at_str.replace("Z", "+00:00")
                 paiement_at = datetime.fromisoformat(clean)
+                if paiement_at.tzinfo is None:
+                    # Format inattendu sans tz : on assume UTC (paiement_at
+                    # est stocke en UTC en base Supabase).
+                    paiement_at = paiement_at.replace(tzinfo=timezone.utc)
             except ValueError:
                 continue
+            parsed.append((tx, paiement_at))
 
-            ecart = (now_local - paiement_at).total_seconds()
+        if not parsed:
+            return
 
-            # ─── Compteur lisible : verification standard ───
-            if counter_now is not None:
-                effective_counter = counter_now + attributed_in_tick
-
-                # Snapshot feuilles_avant si pas deja fait
-                feuilles_avant = tx.get("feuilles_avant")
-                if feuilles_avant is None:
+        # --- Phase 1 : snapshot feuilles_avant manquant ---
+        if counter_now is not None:
+            for tx, paiement_at in parsed:
+                if tx.get("feuilles_avant") is None:
                     ref = self._counter_at(paiement_at)
                     if ref is None:
-                        ref = effective_counter
-                    self._patch(tx_id, {"feuilles_avant": ref})
-                    feuilles_avant = ref
+                        ref = counter_now
+                    self._patch(tx["id"], {"feuilles_avant": ref})
+                    tx["feuilles_avant"] = ref
 
+        # --- Phase 2 : combien de tx marquer (oldest first) ---
+        to_mark = []
+        if counter_now is not None:
+            for tx, paiement_at in parsed:
+                feuilles_avant = tx.get("feuilles_avant")
+                if feuilles_avant is None:
+                    break
+                # Compteur 'effectif' : decremente d'autant que de tx deja
+                # marquees dans CE tick. Quand plusieurs paiements en rafale
+                # ont le meme feuilles_avant, ca repartit la baisse globale
+                # une feuille a la fois sur les plus anciennes.
+                effective_counter = counter_now + len(to_mark)
                 baisse = feuilles_avant - effective_counter
-
                 if baisse >= 1:
-                    # On NE detecte plus 'multiple' automatiquement : trop de
-                    # faux positifs quand une tx voit son `feuilles_avant`
-                    # rester stale alors qu'une tx anterieure (deja resolue
-                    # et hors pending) a consomme des feuilles entre temps.
-                    # Pour detecter une vraie anomalie 'multiple' (1 tx = 2
-                    # feuilles), faire la reconciliation cote dashboard sur
-                    # totaux journaliers.
-                    self._patch(tx_id, {
-                        "feuilles_apres": effective_counter,
-                        "impression_verifiee_papier": True,
-                        "impression_declenchee": True,
-                        "anomalie_impression": None,
-                    })
-                    self._resolved.add(tx_id)
-                    attributed_in_tick += 1
-                    import activity_logger as alog
-                    alog.log_tpe_confirmation(tx_id)
-                    print(
-                        f"[PRINTER_COUNTER] Impression verifiee {tx_id[:8]} "
-                        f"({feuilles_avant}->{effective_counter})"
-                    )
-                    continue
+                    to_mark.append((tx, paiement_at))
+                else:
+                    # Les tx suivantes (asc) auraient effective_counter encore
+                    # plus haut -> baisse encore plus negative -> break.
+                    break
 
-            # ─── Deadline depassee : anomalie 'non_delivree' ───
-            # Declenche meme quand le compteur est illisible (DLL en erreur).
-            # Sans compteur on ne peut pas confirmer l'impression : on assume non delivree.
+        # --- Phase 3 : marquer to_mark avec feuilles_apres descendant ---
+        # Plus ancienne = plus haute valeur (juste apres la 1ere impression).
+        # Plus recente = plus basse valeur (= counter_now actuel).
+        nb = len(to_mark)
+        marked_ids = set()
+        for i, (tx, _) in enumerate(to_mark):
+            feuilles_apres = counter_now + (nb - 1 - i)
+            self._patch(tx["id"], {
+                "feuilles_apres": feuilles_apres,
+                "impression_verifiee_papier": True,
+                "impression_declenchee": True,
+                "anomalie_impression": None,
+            })
+            self._resolved.add(tx["id"])
+            marked_ids.add(tx["id"])
+            import activity_logger as alog
+            alog.log_tpe_confirmation(tx["id"])
+            print(
+                f"[PRINTER_COUNTER] Impression verifiee {tx['id'][:8]} "
+                f"({tx.get('feuilles_avant')}->{feuilles_apres})"
+            )
+
+        # --- Phase 4 : deadline pour les non marquees ---
+        for tx, paiement_at in parsed:
+            tx_id = tx["id"]
+            if tx_id in marked_ids or tx_id in self._resolved:
+                continue
+            ecart = (now_utc - paiement_at).total_seconds()
             if ecart > FENETRE_VERIFICATION_S:
-                self._patch(tx_id, {
-                    "feuilles_apres": counter_now,
-                    "anomalie_impression": "non_delivree",
-                })
+                # Bug 1 : ne pas ecrire null si DLL injoignable. On retombe
+                # sur la derniere valeur connue de l'historique. Si on a
+                # vraiment rien (process qui vient de demarrer), on omet la
+                # cle plutot que d'ecrire null.
+                last_known = counter_now
+                if last_known is None and self._history:
+                    last_known = self._history[-1][1]
+                data = {"anomalie_impression": "non_delivree"}
+                if last_known is not None:
+                    data["feuilles_apres"] = last_known
+                self._patch(tx_id, data)
                 self._resolved.add(tx_id)
                 self._creer_alerte_non_delivree(tx_id, paiement_at)
                 print(
                     f"[PRINTER_COUNTER] NON DELIVREE {tx_id[:8]} "
-                    f"(feuilles={counter_now}, deadline depassee de {ecart-FENETRE_VERIFICATION_S:.0f}s)"
+                    f"(feuilles_apres={last_known}, deadline depassee de "
+                    f"{ecart-FENETRE_VERIFICATION_S:.0f}s)"
                 )
 
     def close(self):
