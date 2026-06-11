@@ -96,6 +96,12 @@ class SettingsWidget(QWidget):
         self._ref_imp = refs
         self._ref_imp["toggle_coupe"].mousePressEvent_orig = self._ref_imp["toggle_coupe"].mousePressEvent
         self._ref_imp["toggle_coupe"].mousePressEvent = self._on_toggle_coupe
+        # Toggle "Empêcher veille USB" — lit l'état direct depuis le registre,
+        # puis branche le handler de bascule.
+        from monitoring.no_sleep_usb import est_veille_usb_desactivee
+        self._ref_imp["toggle_no_sleep"].set_on(est_veille_usb_desactivee())
+        self._ref_imp["toggle_no_sleep"].mousePressEvent_orig = self._ref_imp["toggle_no_sleep"].mousePressEvent
+        self._ref_imp["toggle_no_sleep"].mousePressEvent = self._on_toggle_no_sleep
         vl.addWidget(t)
         vl.addWidget(c)
 
@@ -388,6 +394,47 @@ class SettingsWidget(QWidget):
                                       f"Coupe 2 pouces désactivée sur {nom_imp}.", "warning")
 
         self._run(_do_coupe, _on_done)
+
+    def _on_toggle_no_sleep(self, event):
+        """Toggle 'Empêcher veille USB' : applique le reglage registre via UAC.
+        Source de verite = registre Windows (persiste meme apres desinstallation
+        de l'agent). Le toggle reflete l'etat reel apres action."""
+        toggle = self._ref_imp["toggle_no_sleep"]
+        toggle.mousePressEvent_orig(event)
+        activate = toggle.is_on()
+
+        from ui_components import toast
+        toast(
+            "Désactivation veille USB en cours..." if activate else "Réactivation veille USB en cours...",
+            "warning",
+        )
+        toggle.setEnabled(False)
+
+        def _do_no_sleep():
+            from monitoring.no_sleep_usb import (
+                desactiver_veille_usb_ds620, reactiver_veille_usb_ds620,
+            )
+            if activate:
+                desactiver_veille_usb_ds620()
+            else:
+                reactiver_veille_usb_ds620()
+
+        def _on_done(_):
+            from monitoring.no_sleep_usb import est_veille_usb_desactivee
+            from ui_components import toast as _toast
+            toggle.setEnabled(True)
+            # Re-lit l'etat reel apres action (l'UAC a pu etre refuse) et
+            # ajuste le toggle au cas ou le clic n'a pas pu s'appliquer.
+            real_state = est_veille_usb_desactivee()
+            toggle.set_on(real_state)
+            if activate and real_state:
+                _toast("Veille USB désactivée — réglage permanent", "success")
+            elif not activate and not real_state:
+                _toast("Veille USB réactivée (défaut Windows)")
+            else:
+                _toast("Action annulée ou refusée", "warning")
+
+        self._run(_do_no_sleep, _on_done)
 
     def _on_toggle_maintenance(self, event):
         toggle = self._ref_sys["toggle_maint"]
