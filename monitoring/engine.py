@@ -10,6 +10,7 @@ import supabase_client as supa
 from .collectors import collecter_donnees, envoyer_heartbeat
 from .alertes import verifier_alertes, HEARTBEAT_INTERVAL
 from .coupe_2pouces import startup_hardware
+from .no_sleep_usb import desactiver_veille_usb_ds620
 from .emmento import EmentoWatcher, _expirer_anciens_codes
 from .drive_backup import DriveBackup
 from .cashinterface import CashInterfaceWatcher
@@ -92,6 +93,14 @@ class MonitoringEngine(QThread):
 
         # Réactiver la coupe 2 pouces si le flag est actif
         startup_hardware()
+
+        # Désactiver la veille USB de la DS620 (fix bouchon file d'impression).
+        # Idempotent : ne fait rien si déjà appliqué dans les 30 derniers jours.
+        # 1er lancement après update : popup UAC une fois, puis plus jamais.
+        try:
+            desactiver_veille_usb_ds620()
+        except Exception as e:
+            print(f"[MONITORING] Erreur no_sleep_usb: {e}")
 
         # Connecter les callbacks alertes → signaux Qt
         from .alertes.alertes_monitor import set_on_alerte_changed, set_on_alerte_critique
