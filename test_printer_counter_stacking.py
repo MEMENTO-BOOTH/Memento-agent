@@ -18,8 +18,9 @@ from monitoring.printer_counter import PrinterCounterWatcher
 
 class FakePrinter:
     """Imprimante simulee avec compteur controlable."""
-    def __init__(self, initial=100):
+    def __init__(self, initial=100, status=0x10001):
         self._counter = initial
+        self._status = status  # 0x10001 = "En veille" par defaut
         self.h_port = 0
         self.dll = None
         self.name = "FAKE"
@@ -31,17 +32,26 @@ class FakePrinter:
     def read_counter(self):
         return self._counter
 
+    def read_counter_and_status(self):
+        return self._counter, self._status
+
     def close(self):
         pass
 
     def drop(self, n=1):
         self._counter -= n
 
+    def set_status(self, status):
+        self._status = status
+
 
 class FakePrinterDead(FakePrinter):
     """Imprimante dont la DLL ne repond pas (simule un disconnect)."""
     def read_counter(self):
         return None
+
+    def read_counter_and_status(self):
+        return None, None
 
 
 def make_watcher(printer):
@@ -52,6 +62,10 @@ def make_watcher(printer):
     w._history = deque(maxlen=400)
     w._resolved = set()
     w._on_print_started = None
+    w._last_status_code = None
+    w._failed_events = []
+    # Mock le POST printer_events pour ne pas taper Supabase pendant les tests
+    w._post_event = lambda payload: True
     return w
 
 

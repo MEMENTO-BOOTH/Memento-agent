@@ -126,15 +126,28 @@ class _PrinterHandle:
     def read_counter(self):
         """Retourne le compteur feuilles_restantes ou None si indisponible.
         Ouvre et ferme le port a chaque lecture pour ne pas bloquer l'impression."""
+        c, _ = self.read_counter_and_status()
+        return c
+
+    def read_counter_and_status(self):
+        """Retourne (compteur, status) ou (None, None) si indisponible.
+        Une seule ouverture/fermeture du port pour les 2 valeurs.
+        - status = bitfield brut DNP (cf STATUS_MAP de constants.py).
+        - 0x80000000 = imprimante en erreur generale -> None.
+        """
         if not self.open():
-            return None
+            return None, None
         try:
-            v = self.dll.GetMediaCounter(self.h_port)
-            self.close()  # Liberer le port immediatement
-            return v if v >= 0 else None
+            counter = self.dll.GetMediaCounter(self.h_port)
+            status = self.dll.GetStatus(self.h_port)
+            self.close()
+            return (
+                counter if counter >= 0 else None,
+                status if status != 0x80000000 else None,
+            )
         except Exception:
             self.close()
-            return None
+            return None, None
 
     def close(self):
         if self.dll and self.h_port >= 0:
@@ -168,29 +181,104 @@ class PrinterCounterWatcher:
         self._resolved = set()
         # Callback declenche quand le compteur baisse (impression physique detectee)
         self._on_print_started = on_print_started
+        # printer_events : derniere valeur de statut connue (pour detecter les
+        # transitions = un event seulement quand ca change, pas a chaque tick).
+        self._last_status_code = None
+        # Buffer des events qui ont rate leur POST (reseau coupe, Supabase
+        # injoignable...). Reessaye au tick suivant. Cap a 100 pour eviter
+        # une fuite memoire en cas d'incident reseau prolonge.
+        self._failed_events = []
 
     def set_on_print_started(self, cb):
         self._on_print_started = cb
 
     # --- Lecture compteur & historique -------------------------------
     def _tick_counter(self):
-        counter = self._printer.read_counter()
+        counter, status = self._printer.read_counter_and_status()
         # Historique en UTC tz-aware : paiement_at est UTC en base, donc le
         # lookup _counter_at(paiement_at) doit comparer des datetimes dans
         # le meme referentiel sinon decalage de 2h (= CEST). Cf. Bug 4.
         now = datetime.now(timezone.utc)
-        if counter is not None:
-            if self._history and counter < self._history[-1][1] and self._on_print_started:
+
+        # Detecter baisse compteur = photo physiquement sortie
+        drop = 0
+        if counter is not None and self._history and counter < self._history[-1][1]:
+            drop = self._history[-1][1] - counter
+            if self._on_print_started:
                 try:
                     self._on_print_started()
                 except Exception as e:
                     print(f"[PRINTER_COUNTER] on_print_started error: {e}")
+
+        if counter is not None:
             self._history.append((now, counter))
             # Nettoyage > HISTORIQUE_MAX_S
             cutoff = now - timedelta(seconds=HISTORIQUE_MAX_S)
             while self._history and self._history[0][0] < cutoff:
                 self._history.popleft()
+
+        # printer_events : log d'evenement event-based pour la table d'historique
+        # imprimante. Une ligne soit a chaque baisse de compteur (= photo
+        # physique sortie), soit a chaque changement de statut. Permet au
+        # dashboard d'afficher l'etat exact au moment de chaque photo (pas
+        # juste 'Impression') et de tracer les sorties non payees (tests).
+        status_changed = (status is not None and status != self._last_status_code)
+        if drop > 0 or status_changed:
+            self._log_printer_event(now, counter, drop, status)
+        if status is not None:
+            self._last_status_code = status
+
+        # Retry des events qui ont rate (au cas ou Supabase etait injoignable)
+        if self._failed_events:
+            self._flush_failed_events()
+
         return counter
+
+    # --- printer_events : historique imprimante event-based ----------
+    def _statut_clair(self, status_code):
+        """Decode le bitfield DNP en texte humain via STATUS_MAP."""
+        from .alertes.constants import STATUS_MAP
+        if status_code is None:
+            return "Inconnu"
+        return STATUS_MAP.get(status_code, f"Code non mappe (0x{status_code:08X})")
+
+    def _log_printer_event(self, ts_utc, counter, drop, status_code):
+        """Construit le payload et tente le POST. En cas d'echec, bufferise."""
+        if not self._borne_id:
+            return
+        payload = {
+            "borne_id": self._borne_id,
+            "timestamp": ts_utc.isoformat(),
+            "feuilles_restantes": counter,
+            "photos_sorties": drop,
+            "imprimante_statut": self._statut_clair(status_code),
+        }
+        if not self._post_event(payload):
+            self._failed_events.append(payload)
+            # Cap : on garde les 100 plus recents en cas de panne reseau longue
+            if len(self._failed_events) > 100:
+                self._failed_events = self._failed_events[-100:]
+
+    def _post_event(self, payload):
+        """POST silencieux sur printer_events. Retourne True si succes."""
+        try:
+            r = requests.post(
+                f"{supa.SUPABASE_URL}/rest/v1/printer_events",
+                headers=supa.HEADERS_MINIMAL,
+                json=payload,
+                timeout=3,
+            )
+            return r.status_code in (200, 201, 204)
+        except Exception:
+            return False
+
+    def _flush_failed_events(self):
+        """Retry les events bufferises. Garde ceux qui echouent encore."""
+        still_failing = []
+        for ev in self._failed_events:
+            if not self._post_event(ev):
+                still_failing.append(ev)
+        self._failed_events = still_failing
 
     def tick_counter_only(self):
         """Poll rapide du compteur uniquement (pour overlay reactif).
