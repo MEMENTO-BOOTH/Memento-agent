@@ -10,6 +10,7 @@ import supabase_client as supa
 from .collectors import collecter_donnees, envoyer_heartbeat
 from .alertes import verifier_alertes, HEARTBEAT_INTERVAL
 from .coupe_2pouces import startup_hardware
+from .printer_standby import desactiver_au_demarrage as _desactiver_veille_imprimante
 from .emmento import EmentoWatcher, _expirer_anciens_codes
 from .drive_backup import DriveBackup
 from .cashinterface import CashInterfaceWatcher
@@ -92,6 +93,15 @@ class MonitoringEngine(QThread):
 
         # Réactiver la coupe 2 pouces si le flag est actif
         startup_hardware()
+
+        # Désactiver la mise en veille interne de la DS620 (firmware).
+        # Inconditionnel, idempotent, pas d'UAC (appel DLL direct USB).
+        # Si l'imprimante a perdu son réglage (reboot/débranchement),
+        # on le restaure transparently.
+        try:
+            _desactiver_veille_imprimante()
+        except Exception as e:
+            print(f"[MONITORING] Erreur printer_standby: {e}")
 
         # Connecter les callbacks alertes → signaux Qt
         from .alertes.alertes_monitor import set_on_alerte_changed, set_on_alerte_critique
