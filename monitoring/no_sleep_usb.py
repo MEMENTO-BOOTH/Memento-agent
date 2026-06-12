@@ -177,11 +177,32 @@ def est_veille_usb_desactivee():
     return found_any and found_ok
 
 
+def _wait_ps1_done(start_pos, timeout=15):
+    """Attend que le marqueur de fin '[PS-ADMIN-DONE]' apparaisse dans le log.
+    ShellExecuteW est asynchrone : sans attente, on lit l'etat registre
+    AVANT que le script ait fini de patcher -> toggle qui semble annule."""
+    import time
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            with open(LOG_PATH, "r", encoding="utf-8", errors="ignore") as f:
+                f.seek(start_pos)
+                if "[PS-ADMIN-DONE]" in f.read():
+                    return True
+        except Exception:
+            pass
+        time.sleep(0.3)
+    logging.warning("Timeout attente PS1 admin (peut-etre UAC refuse)")
+    return False
+
+
 def _run_admin_ps(activate):
     """Lance un PS1 admin (UAC popup) qui patche les cles registre.
     activate=True  -> veille desactivee (les 3 cles = 0)
     activate=False -> retour au defaut Windows (les 3 cles = 1)
-    """
+
+    Bloque jusqu'a ce que le script PS ait ecrit son marqueur de fin (max 15s),
+    pour que l'appelant puisse lire l'etat registre apres modification."""
     if platform.system() != "Windows":
         return False
 
@@ -256,6 +277,7 @@ if (Test-Path $usbRoot) {{
 }}
 
 Log "{action} terminee. Peripheriques traites: $found"
+Log "[PS-ADMIN-DONE]"
 '''
 
     try:
@@ -264,16 +286,32 @@ Log "{action} terminee. Peripheriques traites: $found"
         with open(ps_path, "w", encoding="utf-8") as f:
             f.write(ps_script)
 
+        # Memoriser la taille du log AVANT le lancement pour ne chercher le
+        # marqueur DONE que dans les nouvelles lignes (evite de matcher un
+        # DONE d'une operation precedente).
+        try:
+            start_pos = os.path.getsize(LOG_PATH)
+        except OSError:
+            start_pos = 0
+
         ret = ctypes.windll.shell32.ShellExecuteW(
             None, "runas", "powershell.exe",
             f'-ExecutionPolicy Bypass -WindowStyle Hidden -File "{ps_path}"',
             None, 0  # SW_HIDE
         )
-        if ret > 32:
-            logging.info(f"Script admin lance ({action}) - resultat dans no_sleep_usb.log")
-            return True
-        logging.warning(f"ShellExecuteW retourne {ret} ({action})")
-        return False
+        if ret <= 32:
+            logging.warning(f"ShellExecuteW retourne {ret} ({action}) - UAC refuse?")
+            return False
+
+        # Bloquer jusqu'a ce que le script ait fini d'ecrire dans le registre.
+        # Sans ca, l'appelant lit l'etat AVANT modification -> toggle qui
+        # semble annule alors qu'il a marche.
+        done = _wait_ps1_done(start_pos, timeout=15)
+        if done:
+            logging.info(f"{action} terminee avec succes")
+        else:
+            logging.warning(f"{action} : timeout - le script n'a pas fini dans les 15s")
+        return done
     except Exception as e:
         logging.error(f"Erreur lancement {action}: {e}")
         return False
