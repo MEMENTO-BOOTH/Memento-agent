@@ -39,6 +39,12 @@ FENETRE_VERIFICATION_S = 180          # 3 min max entre paiement et sortie papie
 HISTORIQUE_MAX_S = 600                # garder 10 min de compteur en RAM
 TX_LOOKBACK_S = 300                   # transactions a prendre en compte (5 min)
 
+# Garde-fou contre les fausses baisses du compteur (cf. bug DNP veille=0).
+# DS620 imprime en ~10s/photo et on poll toutes les 3s -> drop physique max
+# par tick = 1 ou 2 photos. Au-dela, c'est un retour de veille / lecture
+# DLL aberrante -> on ignore (pas d'event printer_events).
+MAX_DROP_PER_TICK = 20
+
 
 # --- Localisation DLL et imprimante (reprise de collectors/printer.py) ---
 def _find_dll():
@@ -134,6 +140,12 @@ class _PrinterHandle:
         Une seule ouverture/fermeture du port pour les 2 valeurs.
         - status = bitfield brut DNP (cf STATUS_MAP de constants.py).
         - 0x80000000 = imprimante en erreur generale -> None.
+
+        Bug DNP : quand l'imprimante est en veille / sommeil, GetMediaCounter
+        renvoie 0 au lieu du vrai compteur. Si on le considere valide,
+        on calcule un faux drop massif (ex: 353 -> 0 = 353 photos sorties).
+        Resultat observe sur Latina Cafe le 14/06 : 3566 photos faussement
+        comptees pour ~10 vraies sorties. -> on filtre counter <= 0 = None.
         """
         if not self.open():
             return None, None
@@ -142,7 +154,7 @@ class _PrinterHandle:
             status = self.dll.GetStatus(self.h_port)
             self.close()
             return (
-                counter if counter >= 0 else None,
+                counter if counter > 0 else None,
                 status if status != 0x80000000 else None,
             )
         except Exception:
@@ -204,6 +216,17 @@ class PrinterCounterWatcher:
         drop = 0
         if counter is not None and self._history and counter < self._history[-1][1]:
             drop = self._history[-1][1] - counter
+            # Garde-fou : un drop trop gros est physiquement impossible
+            # (DS620 imprime ~10s/photo, on lit toutes les 3s). Cause typique :
+            # retour de veille ou lecture DLL aberrante apres un counter=0
+            # passe au travers du filtre. On ignore et on ne contamine pas
+            # l'historique (sinon le tick suivant repropage la fausse baisse).
+            if drop > MAX_DROP_PER_TICK:
+                print(
+                    f"[PRINTER_COUNTER] drop ignore = {drop} (>{MAX_DROP_PER_TICK}), "
+                    f"counter={counter}, last={self._history[-1][1]}"
+                )
+                return counter
             if self._on_print_started:
                 try:
                     self._on_print_started()

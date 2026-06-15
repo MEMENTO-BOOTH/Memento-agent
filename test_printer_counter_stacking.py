@@ -304,6 +304,63 @@ def test_bug4_tz_real_deadline_still_works():
     print(f"[OK] test_bug4_tz_real_deadline_still_works : non_delivree avec feuilles_apres={feuilles_apres}")
 
 
+def test_bug_dnp_counter_zero_en_veille():
+    """Bug DNP : quand la DS620 est en veille, GetMediaCounter renvoie 0
+    au lieu du vrai compteur. Sans fix, on calcule un drop massif (353 -> 0
+    = 353 photos fausses).
+
+    Scenario : counter=353, puis 0 (veille), puis 353 (reveil).
+    Aucun event printer_events avec photos_sorties > 0 ne doit etre
+    insere : 0 = pas une vraie valeur, donc pas une vraie baisse."""
+    printer = FakePrinter(initial=353)
+    w = make_watcher(printer)
+
+    # Capturer les events printer_events
+    events_logged = []
+    w._post_event = lambda payload: (events_logged.append(payload) or True)
+    w._fetch_pending_transactions = lambda: []
+
+    # Tick 1 : lecture normale 353
+    w.tick()
+    # Tick 2 : imprimante passe en veille -> compteur lit 0 (bug DNP)
+    printer._counter = 0
+    w.tick()
+    # Tick 3 : imprimante se reveille -> compteur revient a 353
+    printer._counter = 353
+    w.tick()
+
+    # Aucun event ne doit avoir photos_sorties = 353 (ni meme > 1)
+    big_drops = [e for e in events_logged if e.get("photos_sorties", 0) > 1]
+    assert not big_drops, (
+        f"Aucun drop > 1 attendu, got {[(e['photos_sorties'], e['feuilles_restantes']) for e in big_drops]}"
+    )
+    # Et aucun event avec feuilles_restantes = 0 (= valeur en veille)
+    zero_events = [e for e in events_logged if e.get("feuilles_restantes") == 0]
+    assert not zero_events, (
+        f"Aucun event avec feuilles=0 attendu (= valeur en veille). got {len(zero_events)}"
+    )
+    print(f"[OK] test_bug_dnp_counter_zero_en_veille : {len(events_logged)} events, aucun faux drop")
+
+
+def test_bug_dnp_drop_garde_fou():
+    """Garde-fou : un drop > MAX_DROP_PER_TICK est ignore (cas tordu ou
+    la DLL retourne une valeur aberrante)."""
+    printer = FakePrinter(initial=400)
+    w = make_watcher(printer)
+    events_logged = []
+    w._post_event = lambda payload: (events_logged.append(payload) or True)
+    w._fetch_pending_transactions = lambda: []
+
+    w.tick()  # 400
+    # Drop simule > seuil. counter=350 (valide > 0) mais 50 photos en 3s impossible
+    printer._counter = 350
+    w.tick()
+
+    big_drops = [e for e in events_logged if e.get("photos_sorties", 0) > 1]
+    assert not big_drops, f"Drop > MAX_DROP_PER_TICK devrait etre ignore, got {big_drops}"
+    print(f"[OK] test_bug_dnp_drop_garde_fou : drop aberrant ignore")
+
+
 if __name__ == "__main__":
     test_two_clients_one_print()
     test_two_clients_two_prints_same_tick()
@@ -312,4 +369,6 @@ if __name__ == "__main__":
     test_bug1_feuilles_apres_not_null_when_dll_dead()
     test_bug4_tz_no_false_non_delivree_on_fresh_tx()
     test_bug4_tz_real_deadline_still_works()
+    test_bug_dnp_counter_zero_en_veille()
+    test_bug_dnp_drop_garde_fou()
     print("\nTous les tests OK !")
