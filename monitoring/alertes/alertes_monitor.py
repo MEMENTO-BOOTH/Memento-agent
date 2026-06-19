@@ -97,6 +97,12 @@ _alertes_cache_loaded = False
 _imprimante_disconnect_ticks = 0
 IMPRIMANTE_DECONNECT_CONFIRMATION_TICKS = 2
 
+# Meme pattern pour camera_deconnectee : appareil_connecte=False sur une seule
+# lecture isolee (USB transient, lecture WIA ratee) declenchait l'alerte +
+# SMS. Constate sur MB-18 et MB-29 le 19/06 a ~5h d'intervalle.
+_camera_disconnect_ticks = 0
+CAMERA_DECONNECT_CONFIRMATION_TICKS = 2
+
 # Snooze de la page rupture : timestamp Unix jusqu'auquel elle ne se re-affiche
 # pas, meme si une alerte critique reste ouverte. Set par snooze_rupture() quand
 # le tech valide le PIN. 0 = pas en snooze. NE PERSISTE PAS au reboot (in-memory),
@@ -367,12 +373,20 @@ def verifier_alertes(borne_id, nom_lieu, donnees):
     # 3. CAMÉRA DÉCONNECTÉE
     # ══════════════════════════════════════════════
 
+    global _camera_disconnect_ticks
     appareil = donnees.get("appareil_connecte", False)
     if not appareil:
-        if not _alerte_deja_ouverte(borne_id, "camera_deconnectee"):
-            _creer_alerte(borne_id, "camera_deconnectee", "camera",
-                          f"Caméra déconnectée sur {bar}. Vérifier le câble USB.", "critique")
+        _camera_disconnect_ticks += 1
+        # Meme garde-fou que imprimante_deconnectee : on exige
+        # CAMERA_DECONNECT_CONFIRMATION_TICKS heartbeats consecutifs avant alerte.
+        if _camera_disconnect_ticks >= CAMERA_DECONNECT_CONFIRMATION_TICKS:
+            if not _alerte_deja_ouverte(borne_id, "camera_deconnectee"):
+                _creer_alerte(borne_id, "camera_deconnectee", "camera",
+                              f"Caméra déconnectée sur {bar}. Vérifier le câble USB.", "critique")
+        else:
+            print(f"  [ALERTES] camera deconnectee tick {_camera_disconnect_ticks}/{CAMERA_DECONNECT_CONFIRMATION_TICKS} (transient, pas d'alerte)")
     else:
+        _camera_disconnect_ticks = 0
         _resoudre_alertes(borne_id, ["camera_deconnectee"])
 
     # ══════════════════════════════════════════════
