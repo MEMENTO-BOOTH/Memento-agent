@@ -87,6 +87,16 @@ def _est_dans_horaires(borne_id):
 _alertes_ouvertes = set()
 _alertes_cache_loaded = False
 
+# Compteur de confirmation pour "imprimante deconnectee" : nombre de heartbeats
+# consecutifs ou GetStatus a retourne 0x80000000 (ou statut texte "deconnectee").
+# Une seule lecture isolee a 0x80000000 (= imprimante busy, conflit DLL avec le
+# printer_counter qui poll aussi, ou USB transient) creait jusqu'a present une
+# alerte critique + SMS, auto-resolue ~75s plus tard au heartbeat suivant.
+# Pattern observe : 10 fausses alertes de 70-96s sur 4 jours en juin 2026.
+# Maintenant on attend N ticks confirmes avant de creer l'alerte.
+_imprimante_disconnect_ticks = 0
+IMPRIMANTE_DECONNECT_CONFIRMATION_TICKS = 2
+
 # Snooze de la page rupture : timestamp Unix jusqu'auquel elle ne se re-affiche
 # pas, meme si une alerte critique reste ouverte. Set par snooze_rupture() quand
 # le tech valide le PIN. 0 = pas en snooze. NE PERSISTE PAS au reboot (in-memory),
@@ -287,6 +297,7 @@ def verifier_alertes(borne_id, nom_lieu, donnees):
     # 0. IMPRIMANTE DÉCONNECTÉE
     # ══════════════════════════════════════════════
 
+    global _imprimante_disconnect_ticks
     imprimante_statut = donnees.get("imprimante_statut") or ""
     deconnecte = (
         status == 0x80000000
@@ -294,12 +305,23 @@ def verifier_alertes(borne_id, nom_lieu, donnees):
     )
     # status=None et statut="" ou None : lecture pas encore faite ou DLL en hang.
     # On NE declenche PAS d'alerte dans ce cas (eviterait les fausses alertes).
+    # On ne touche PAS au compteur non plus (pas d'info -> on suspend le decompte).
+    statut_lisible = status is not None and bool(imprimante_statut)
+
     if deconnecte:
-        if not _alerte_deja_ouverte(borne_id, "imprimante_deconnectee"):
-            _creer_alerte(borne_id, "imprimante_deconnectee", "imprimante",
-                          f"Imprimante déconnectée sur {bar}.", "critique")
-    elif status is not None and imprimante_statut:
-        # Statut clairement OK : on resout d'eventuelles alertes ouvertes
+        _imprimante_disconnect_ticks += 1
+        # Une seule lecture deconnectee = transient (DLL busy, conflit avec
+        # printer_counter, USB glitch). On exige IMPRIMANTE_DECONNECT_CONFIRMATION_TICKS
+        # heartbeats consecutifs pour creer l'alerte (= ~2 minutes de vraie deconnexion).
+        if _imprimante_disconnect_ticks >= IMPRIMANTE_DECONNECT_CONFIRMATION_TICKS:
+            if not _alerte_deja_ouverte(borne_id, "imprimante_deconnectee"):
+                _creer_alerte(borne_id, "imprimante_deconnectee", "imprimante",
+                              f"Imprimante déconnectée sur {bar}.", "critique")
+        else:
+            print(f"  [ALERTES] imprimante deconnectee tick {_imprimante_disconnect_ticks}/{IMPRIMANTE_DECONNECT_CONFIRMATION_TICKS} (transient, pas d'alerte)")
+    elif statut_lisible:
+        # Statut clairement OK : reset compteur + resout d'eventuelles alertes ouvertes
+        _imprimante_disconnect_ticks = 0
         _resoudre_alertes(borne_id, ["imprimante_deconnectee"])
 
     # ══════════════════════════════════════════════
