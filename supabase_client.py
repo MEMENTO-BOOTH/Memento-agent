@@ -343,14 +343,15 @@ def _get_borne_environnement(borne_id):
 
 
 def _fetch_dashboard_release(channel):
-    """Appelle le dashboard /api/agent/release/{channel}. Retourne le dict
-    decode JSON ou None si echec / non configure."""
-    if not DASHBOARD_URL or not AGENT_API_TOKEN:
+    if not DASHBOARD_URL:
         return None
+    headers = {}
+    if AGENT_API_TOKEN:
+        headers["Authorization"] = f"Bearer {AGENT_API_TOKEN}"
     try:
         r = requests.get(
             f"{DASHBOARD_URL}/api/agent/release/{channel}",
-            headers={"Authorization": f"Bearer {AGENT_API_TOKEN}"},
+            headers=headers,
             timeout=TIMEOUT,
         )
         if r.status_code != 200:
