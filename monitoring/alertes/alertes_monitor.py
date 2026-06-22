@@ -117,7 +117,13 @@ def _charger_cache_alertes(borne_id):
     Si des alertes visuellement critiques sont encore ouvertes en base, on
     reaffiche IMMEDIATEMENT la page rupture (sans nouveau SMS — on rappelle
     juste le callback Qt visuel, pas _creer_alerte). Cela couvre le cas
-    'reboot agent alors qu'une alerte critique etait en cours'."""
+    'reboot agent alors qu'une alerte critique etait en cours'.
+
+    Bug v1.0.24.8 et avant : `_alertes_cache_loaded = True` etait set meme
+    si la requete Supabase echouait (reseau pas pret au boot Windows).
+    Cache vide pour toute la session -> resolutions ulterieures skipees
+    -> alertes restees ouvertes indefiniment. Fix : on ne marque le cache
+    comme charge que si la requete reussit, sinon on retentera."""
     global _alertes_ouvertes, _alertes_cache_loaded
     if _alertes_cache_loaded:
         return
@@ -135,9 +141,11 @@ def _charger_cache_alertes(borne_id):
             if critiques and _on_alerte_critique:
                 _on_alerte_critique(True)
                 print(f"  [CACHE] Re-affichage rupture au boot (critiques: {critiques})")
-    except Exception:
-        pass
-    _alertes_cache_loaded = True
+            _alertes_cache_loaded = True
+        else:
+            print(f"  [CACHE] Echec chargement (status {r.status_code}), retry au prochain tick")
+    except Exception as e:
+        print(f"  [CACHE] Echec chargement ({type(e).__name__}), retry au prochain tick")
 
 
 def snooze_rupture(seconds=RUPTURE_SNOOZE_SEC):
@@ -240,28 +248,40 @@ def _creer_alerte(borne_id, type_alerte, source, message, gravite="critique"):
 
 
 def _resoudre_alertes(borne_id, types):
+    """Resout une alerte si elle est ouverte en cache OU en base.
+
+    Bug v1.0.24.8 et avant : `if t not in _alertes_ouvertes: continue` skipait
+    le PATCH Supabase si le cache local etait desynchronise (= cache vide
+    car _charger_cache_alertes avait echoue au boot, ou crash de l'agent
+    entre creation et resolution). Resultat : alerte fantome en base meme
+    apres que la condition ait disparu - page rupture maintenue.
+
+    Fix : on tente TOUJOURS le PATCH Supabase. Le GET initial est de toute
+    facon necessaire pour avoir l'ID. Si rien en base -> on skip silencieusement
+    (cas nominal ou il n'y a vraiment rien a resoudre)."""
     for t in types:
-        if t not in _alertes_ouvertes:
-            continue  # Pas ouverte dans le cache → rien à résoudre
+        was_in_cache = t in _alertes_ouvertes
         try:
-            # 1. D'ABORD mettre à jour l'app
-            _alertes_ouvertes.discard(t)
-            print(f"  [RÉSOLU] {t}")
-            import activity_logger as alog
-            from alertes.data import TYPE_LABELS, TYPE_TO_ICON
-            label = TYPE_LABELS.get(t, t)
-            icon = TYPE_TO_ICON.get(t, "icon_borne_hors_ligne.svg")
-            alog.log_alerte_resolue(t, "agent-auto")
-            alog.ui_alerte(f"{label} — Résolu par Agent", icon, resolved=True)
+            # 1. Mettre a jour le cache local et l'UI (si l'alerte etait connue)
+            if was_in_cache:
+                _alertes_ouvertes.discard(t)
+                print(f"  [RÉSOLU] {t}")
+                import activity_logger as alog
+                from alertes.data import TYPE_LABELS, TYPE_TO_ICON
+                label = TYPE_LABELS.get(t, t)
+                icon = TYPE_TO_ICON.get(t, "icon_borne_hors_ligne.svg")
+                alog.log_alerte_resolue(t, "agent-auto")
+                alog.ui_alerte(f"{label} — Résolu par Agent", icon, resolved=True)
 
-            if _on_alerte_changed:
-                _on_alerte_changed()
-            # Cacher la page rupture s'il ne reste plus d'alertes visuellement critiques
-            alertes_critiques_restantes = _alertes_ouvertes - _TYPES_WARNING_VISUEL
-            if _on_alerte_critique and not alertes_critiques_restantes:
-                _on_alerte_critique(False)
+                if _on_alerte_changed:
+                    _on_alerte_changed()
+                # Cacher la page rupture s'il ne reste plus d'alertes visuellement critiques
+                alertes_critiques_restantes = _alertes_ouvertes - _TYPES_WARNING_VISUEL
+                if _on_alerte_critique and not alertes_critiques_restantes:
+                    _on_alerte_critique(False)
 
-            # 2. ENSUITE envoyer à Supabase
+            # 2. TOUJOURS chercher en base pour rattraper les alertes orphelines
+            #    (cache desynchro, alerte creee par un agent precedent, etc.)
             r = requests.get(
                 f"{supa.SUPABASE_URL}/rest/v1/alertes"
                 f"?borne_id=eq.{borne_id}&type=eq.{t}&statut=eq.ouverte&select=id",
