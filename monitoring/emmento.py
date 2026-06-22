@@ -50,7 +50,8 @@ _DSLRBOOTH_DB_MATCHES = sorted(
     reverse=True,
 )
 DSLRBOOTH_DB = _DSLRBOOTH_DB_MATCHES[0] if _DSLRBOOTH_DB_MATCHES else ""
-DSLRBOOTH_BASE = r"C:\dslrBooth"
+from .dslrbooth_config import get_dslrbooth_base
+DSLRBOOTH_BASE = get_dslrbooth_base()
 QR_OUTPUT = r"C:\SocialBooth\qrcode.png"
 
 # Config par défaut pour l'image du code

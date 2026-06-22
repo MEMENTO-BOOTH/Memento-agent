@@ -12,7 +12,8 @@ from datetime import datetime
 
 import supabase_client as supa
 
-DSLRBOOTH_BASE = r"C:\dslrBooth"
+from .dslrbooth_config import get_dslrbooth_base
+DSLRBOOTH_BASE = get_dslrbooth_base()
 
 # Mapping reason interne -> (type d'alerte Supabase, gabarit du message client).
 # Le {bar} sera remplace par le nom du bar de la borne.
