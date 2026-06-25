@@ -10,10 +10,11 @@
 
 $ErrorActionPreference = "Continue"
 
-# Single-instance via mutex global : si une autre instance tourne deja, on
-# sort silencieusement. Empeche l'accumulation si le watchdog est rappele
-# (cas observe avec le StartupWatchdog generique sur certaines bornes).
-$mutex = New-Object System.Threading.Mutex($false, "Global\Memento_AgentWatchdog")
+# Single-instance via mutex Local : si une autre instance tourne deja dans
+# la meme session user, on sort silencieusement. Sur les bornes en kiosk,
+# une seule session user existe donc Local suffit. Global\ requiert
+# SeCreateGlobalPrivilege que les users normaux n'ont pas (silent fail).
+$mutex = New-Object System.Threading.Mutex($false, "Local\Memento_AgentWatchdog")
 if (-not $mutex.WaitOne(0, $false)) {
     exit
 }

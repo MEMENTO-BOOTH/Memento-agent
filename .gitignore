@@ -27,3 +27,11 @@ Thumbs.db
 # Temp
 *.tmp
 *.bak
+
+# Scripts de debug/audit ponctuels (prefixe _)
+_*.py
+_*.txt
+
+# Audit hors-versionning
+audit_*.py
+audit_*.xlsx

@@ -29,6 +29,12 @@ if %ERRORLEVEL% == 0 (
     schtasks /delete /tn "MementoWatchdog" /f >nul 2>&1
 )
 
+REM Cleanup proactif : tuer toutes les instances existantes du watchdog
+REM avant d'en lancer une nouvelle. Empeche l'accumulation observee sur
+REM les bornes equipees du StartupWatchdog tiers (qui pouvait spawner
+REM plusieurs instances avant le passage en HKCU\Run + mutex Local).
+powershell -NoProfile -ExecutionPolicy Bypass -Command "Get-CimInstance Win32_Process -Filter \"Name='powershell.exe'\" | Where-Object { $_.CommandLine -match 'MementoAgent.watchdog.watchdog.ps1' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }" >nul 2>&1
+
 REM Creer l'entree HKCU\Run (pas besoin d'admin, pas dans startup folder)
 reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\Run" /v "%REG_NAME%" /t REG_SZ /d "wscript.exe \"%VBS_PATH%\"" /f >nul
 
