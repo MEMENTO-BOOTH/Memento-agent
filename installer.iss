@@ -37,7 +37,7 @@ OutputBaseFilename=MementoAgent_Setup_{#MyAppVersion}
 Compression=lzma2/ultra64
 SolidCompression=yes
 WizardStyle=modern
-PrivilegesRequired=admin
+PrivilegesRequired=lowest
 ArchitecturesInstallIn64BitMode=x64compatible
 DisableProgramGroupPage=yes
 ; Masquer les pages redondantes — l'app gère son propre setup au 1er lancement
@@ -93,8 +93,10 @@ Filename: "{app}\{#MyAppExeName}"; Description: "Lancer {#MyAppName}"; Flags: no
 Type: filesandordirs; Name: "{app}"
 
 [UninstallRun]
-; Supprimer la tache planifiee watchdog avant desinstallation
-Filename: "schtasks"; Parameters: "/delete /tn MementoWatchdog /f"; Flags: runhidden; RunOnceId: "RemoveWatchdog"
+; Supprimer le raccourci du startup folder
+Filename: "cmd"; Parameters: "/c del ""%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\MementoWatchdog.lnk"""; Flags: runhidden; RunOnceId: "RemoveWatchdogShortcut"
+; Tuer le watchdog (process wscript.exe lance par le raccourci)
+Filename: "taskkill"; Parameters: "/F /FI ""WINDOWTITLE eq MementoWatchdog*"""; Flags: runhidden; RunOnceId: "KillWatchdog"
 ; Fermer l'app avant désinstallation
 Filename: "taskkill"; Parameters: "/F /IM {#MyAppExeName}"; Flags: runhidden; RunOnceId: "KillApp"
 

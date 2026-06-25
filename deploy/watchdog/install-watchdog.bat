@@ -1,46 +1,40 @@
 @echo off
-REM Installe la tache planifiee Windows qui lance le watchdog au boot.
+REM Installe le watchdog en mode user normal (sans admin, sans UAC).
 REM
-REM Necessite des droits admin (sinon impossible de creer une tache SYSTEM).
-REM L'installer Inno Setup execute ce script avec PrivilegesRequired=admin.
-REM
-REM La tache :
-REM   - tourne sous le compte SYSTEM (independant de la session user)
-REM   - se declenche au boot
-REM   - lance start-watchdog.vbs (qui lance watchdog.ps1 sans fenetre)
-REM   - reste persistante meme si tous les utilisateurs sont deconnectes
+REM Cree un raccourci dans le dossier Startup de l'utilisateur courant qui lance
+REM start-watchdog.vbs au demarrage Windows. Aucun droit admin requis.
+REM Les bornes en kiosk ont l'utilisateur connecte en permanence, donc startup
+REM folder est suffisant et evite la fenetre UAC sur les 200+ bornes.
 
-set TASK_NAME=MementoWatchdog
+set STARTUP_DIR=%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup
 set VBS_PATH=%LOCALAPPDATA%\MementoAgent\watchdog\start-watchdog.vbs
+set SHORTCUT=%STARTUP_DIR%\MementoWatchdog.lnk
 
-REM Verifier que le VBS existe (paranoia : si installer cassee, on log et on sort)
 if not exist "%VBS_PATH%" (
     echo [ERREUR] %VBS_PATH% introuvable, watchdog non installe
     exit /b 1
 )
 
-REM Supprimer l'ancienne tache si elle existe (idempotence : ce script
-REM peut etre relance par chaque update sans creer de doublons)
-schtasks /query /tn "%TASK_NAME%" >nul 2>&1
+REM Supprimer ancien raccourci si existe (idempotence : reinstall ne casse rien)
+if exist "%SHORTCUT%" del "%SHORTCUT%" >nul 2>&1
+
+REM Si une ancienne tache planifiee SYSTEM existe (vieux pre-release v1.0.25.0
+REM avant correction), la supprimer. Necessite admin mais si ca rate c'est pas grave.
+schtasks /query /tn "MementoWatchdog" >nul 2>&1
 if %ERRORLEVEL% == 0 (
-    schtasks /delete /tn "%TASK_NAME%" /f >nul 2>&1
+    schtasks /delete /tn "MementoWatchdog" /f >nul 2>&1
 )
 
-REM Creer la tache : au boot, en SYSTEM, sans interaction utilisateur
-schtasks /create ^
-    /tn "%TASK_NAME%" ^
-    /tr "wscript.exe \"%VBS_PATH%\"" ^
-    /sc onstart ^
-    /ru SYSTEM ^
-    /rl HIGHEST ^
-    /f >nul
+REM Creer le raccourci via PowerShell (sans console visible grace au flag minimized)
+powershell -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -Command "$s=(New-Object -ComObject WScript.Shell).CreateShortcut('%SHORTCUT%'); $s.TargetPath='wscript.exe'; $s.Arguments='\"%VBS_PATH%\"'; $s.WindowStyle=7; $s.Save()" >nul 2>&1
 
-if %ERRORLEVEL% == 0 (
-    echo [OK] Tache planifiee "%TASK_NAME%" creee
-    REM Lancer le watchdog immediatement (pas attendre le prochain reboot)
-    schtasks /run /tn "%TASK_NAME%" >nul 2>&1
-    exit /b 0
-) else (
-    echo [ERREUR] Creation tache echouee, code %ERRORLEVEL%
+if not exist "%SHORTCUT%" (
+    echo [ERREUR] Creation raccourci echouee
     exit /b 1
 )
+
+echo [OK] Watchdog installe au demarrage Windows (user, sans admin)
+
+REM Demarrer immediatement le watchdog (pas attendre prochain reboot)
+start "" wscript.exe "%VBS_PATH%"
+exit /b 0
