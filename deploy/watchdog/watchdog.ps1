@@ -10,6 +10,14 @@
 
 $ErrorActionPreference = "Continue"
 
+# Single-instance via mutex global : si une autre instance tourne deja, on
+# sort silencieusement. Empeche l'accumulation si le watchdog est rappele
+# (cas observe avec le StartupWatchdog generique sur certaines bornes).
+$mutex = New-Object System.Threading.Mutex($false, "Global\Memento_AgentWatchdog")
+if (-not $mutex.WaitOne(0, $false)) {
+    exit
+}
+
 $agentDir = Join-Path $env:LOCALAPPDATA "MementoAgent"
 $agentExe = Join-Path $agentDir "MementoAgent.exe"
 $alertesLog = Join-Path $agentDir "alertes.log"

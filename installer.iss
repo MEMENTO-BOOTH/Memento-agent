@@ -67,6 +67,7 @@ Source: ".env"; DestDir: "{app}"; Flags: onlyifdoesntexist
 Source: "deploy\watchdog\watchdog.ps1"; DestDir: "{app}\watchdog"; Flags: ignoreversion
 Source: "deploy\watchdog\start-watchdog.vbs"; DestDir: "{app}\watchdog"; Flags: ignoreversion
 Source: "deploy\watchdog\install-watchdog.bat"; DestDir: "{app}\watchdog"; Flags: ignoreversion
+Source: "deploy\watchdog\uninstall-watchdog.bat"; DestDir: "{app}\watchdog"; Flags: ignoreversion
 
 
 [Icons]
@@ -93,10 +94,8 @@ Filename: "{app}\{#MyAppExeName}"; Description: "Lancer {#MyAppName}"; Flags: no
 Type: filesandordirs; Name: "{app}"
 
 [UninstallRun]
-; Supprimer le raccourci du startup folder
-Filename: "cmd"; Parameters: "/c del ""%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\MementoWatchdog.lnk"""; Flags: runhidden; RunOnceId: "RemoveWatchdogShortcut"
-; Tuer le watchdog (process wscript.exe lance par le raccourci)
-Filename: "taskkill"; Parameters: "/F /FI ""WINDOWTITLE eq MementoWatchdog*"""; Flags: runhidden; RunOnceId: "KillWatchdog"
+; Cleanup complet du watchdog (registry + raccourcis + processus)
+Filename: "{app}\watchdog\uninstall-watchdog.bat"; Flags: runhidden waituntilterminated; RunOnceId: "UninstallWatchdog"
 ; Fermer l'app avant désinstallation
 Filename: "taskkill"; Parameters: "/F /IM {#MyAppExeName}"; Flags: runhidden; RunOnceId: "KillApp"
 

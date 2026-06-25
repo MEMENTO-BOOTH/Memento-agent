@@ -1,40 +1,46 @@
 @echo off
 REM Installe le watchdog en mode user normal (sans admin, sans UAC).
 REM
-REM Cree un raccourci dans le dossier Startup de l'utilisateur courant qui lance
-REM start-watchdog.vbs au demarrage Windows. Aucun droit admin requis.
-REM Les bornes en kiosk ont l'utilisateur connecte en permanence, donc startup
-REM folder est suffisant et evite la fenetre UAC sur les 200+ bornes.
+REM Cree une entree HKCU\Software\Microsoft\Windows\CurrentVersion\Run
+REM pour lancer start-watchdog.vbs au demarrage de la session utilisateur.
+REM
+REM Pourquoi pas le startup folder : certaines bornes ont un script tiers
+REM (StartupWatchdog generique) qui scanne le startup folder et relance
+REM tout programme qu'il ne trouve pas en process. Vu que notre VBS meurt
+REM apres avoir lance powershell, le StartupWatchdog le relance en boucle.
+REM HKCU\Run n'est pas scanne par ce script tiers -> pas de conflit.
 
-set STARTUP_DIR=%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup
 set VBS_PATH=%LOCALAPPDATA%\MementoAgent\watchdog\start-watchdog.vbs
-set SHORTCUT=%STARTUP_DIR%\MementoWatchdog.lnk
+set REG_NAME=MementoAgentWatchdog
 
 if not exist "%VBS_PATH%" (
     echo [ERREUR] %VBS_PATH% introuvable, watchdog non installe
     exit /b 1
 )
 
-REM Supprimer ancien raccourci si existe (idempotence : reinstall ne casse rien)
-if exist "%SHORTCUT%" del "%SHORTCUT%" >nul 2>&1
+REM Cleanup ancien raccourci Startup (rollback pour les bornes ayant eu
+REM la v1.0.25.0 initiale avec startup folder)
+set OLD_LNK=%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\MementoWatchdog.lnk
+if exist "%OLD_LNK%" del "%OLD_LNK%" >nul 2>&1
 
-REM Si une ancienne tache planifiee SYSTEM existe (vieux pre-release v1.0.25.0
-REM avant correction), la supprimer. Necessite admin mais si ca rate c'est pas grave.
+REM Cleanup ancienne tache planifiee SYSTEM (rollback v1.0.25.0 admin)
 schtasks /query /tn "MementoWatchdog" >nul 2>&1
 if %ERRORLEVEL% == 0 (
     schtasks /delete /tn "MementoWatchdog" /f >nul 2>&1
 )
 
-REM Creer le raccourci via PowerShell (sans console visible grace au flag minimized)
-powershell -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -Command "$s=(New-Object -ComObject WScript.Shell).CreateShortcut('%SHORTCUT%'); $s.TargetPath='wscript.exe'; $s.Arguments='\"%VBS_PATH%\"'; $s.WindowStyle=7; $s.Save()" >nul 2>&1
+REM Creer l'entree HKCU\Run (pas besoin d'admin, pas dans startup folder)
+reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\Run" /v "%REG_NAME%" /t REG_SZ /d "wscript.exe \"%VBS_PATH%\"" /f >nul
 
-if not exist "%SHORTCUT%" (
-    echo [ERREUR] Creation raccourci echouee
+if %ERRORLEVEL% neq 0 (
+    echo [ERREUR] Creation entree registry echouee
     exit /b 1
 )
 
-echo [OK] Watchdog installe au demarrage Windows (user, sans admin)
+echo [OK] Watchdog installe (HKCU\Run, sans admin, sans conflit avec autres watchdogs)
 
-REM Demarrer immediatement le watchdog (pas attendre prochain reboot)
+REM Demarrer immediatement le watchdog (pas attendre prochain reboot).
+REM Le mutex single-instance dans watchdog.ps1 empeche les doublons si
+REM celui-ci est appele plusieurs fois.
 start "" wscript.exe "%VBS_PATH%"
 exit /b 0
