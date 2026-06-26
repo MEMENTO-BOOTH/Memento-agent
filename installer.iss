@@ -40,6 +40,14 @@ WizardStyle=modern
 PrivilegesRequired=lowest
 ArchitecturesInstallIn64BitMode=x64compatible
 DisableProgramGroupPage=yes
+; Auto-update : le nouvel installer doit fermer MementoAgent.exe en cours
+; (sinon le replace du .exe foire silencieusement et la borne reste bloquee
+; sur l'ancienne version meme si elle voit la nouvelle dispo).
+; CloseApplications=force utilise le Restart Manager Windows pour fermer
+; proprement l'agent avant de remplacer le fichier. RestartApplications=no
+; car le watchdog (ou le postinstall) relancera l'agent.
+CloseApplications=force
+RestartApplications=no
 ; Masquer les pages redondantes — l'app gère son propre setup au 1er lancement
 DisableWelcomePage=yes
 DisableReadyPage=yes
