@@ -56,6 +56,7 @@ ALERTES_CRITIQUES = {
     0x20002: {"type": "bourrage_papier",    "message": "Bourrage papier. Intervention nécessaire."},
     0x10008: {"type": "fin_papier",         "message": "Plus de papier. Rouleau à changer."},
     0x10010: {"type": "fin_ruban",          "message": "Ruban épuisé. À remplacer."},
+    0x20004: {"type": "erreur_ruban",       "message": "Erreur ruban. Vérifier l'insertion du média."},
     0x20001: {"type": "capot_ouvert",       "message": "Capot ouvert. Vérifier l'imprimante."},
     0x20020: {"type": "bac_chutes_plein",   "message": "Bac à déchets plein. À vider."},
 }
@@ -69,7 +70,7 @@ ALERTES_WARNING = {
 
 # Tous les types d'alertes gérés
 TOUS_TYPES_ALERTES = [
-    "bourrage_papier", "fin_papier", "fin_ruban", "crash_cashinterface",
+    "bourrage_papier", "fin_papier", "fin_ruban", "erreur_ruban", "crash_cashinterface",
     "capot_ouvert", "bac_chutes_plein", "erreur_mecanique",
     "surchauffe", "papier_bas", "camera_deconnectee",
     "crash_dslrbooth", "disque_bas", "disque_plein",

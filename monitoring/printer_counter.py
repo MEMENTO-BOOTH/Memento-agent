@@ -331,6 +331,7 @@ class PrinterCounterWatcher:
                 f"&impression_verifiee_papier=eq.false"
                 f"&anomalie_impression=is.null"
                 f"&paiement_at=gte.{cutoff}"
+                f"&montant=gt.0"
                 f"&order=paiement_at.asc"
                 f"&select=id,paiement_at,feuilles_avant,carte_4_derniers",
                 headers=supa.HEADERS, timeout=5,

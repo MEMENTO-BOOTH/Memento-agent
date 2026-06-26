@@ -5,6 +5,7 @@ Lance le heartbeat + alertes + e-memento + drive backup dans un QThread."""
 import os
 import time
 import socket
+import traceback as _tb
 from PyQt5.QtCore import QThread, pyqtSignal
 import supabase_client as supa
 from .collectors import collecter_donnees, envoyer_heartbeat
@@ -16,6 +17,22 @@ from .drive_backup import DriveBackup
 from .cashinterface import CashInterfaceWatcher
 from .printer_counter import PrinterCounterWatcher
 from .led_strip import LedStripWatcher
+
+
+def _safe_tick(fn, category):
+    """Execute fn() en attrapant toute exception et en la loguant dans
+    alertes.log avec la stack trace complete. Empeche un crash dans un
+    sous-tick de tuer le thread monitoring (incident REV3 22/06/2026)."""
+    try:
+        fn()
+    except Exception as e:
+        tb = _tb.format_exc()
+        print(f"[{category}] Erreur: {e}")
+        try:
+            import activity_logger as alog
+            alog.log_generic(f"{category}_CRASH", f"{e}\n{tb}")
+        except Exception:
+            pass
 
 
 class MonitoringEngine(QThread):
@@ -211,6 +228,16 @@ class MonitoringEngine(QThread):
                 self.error.emit(str(e))
                 print(f"[MONITORING] Erreur: {e}")
 
+            # Heartbeat "je suis en vie" toutes les 3 cycles (~3 min) — sert au
+            # watchdog externe a savoir que l'agent n'est pas freeze. Si rien
+            # n'est ecrit dans alertes.log depuis 3 min, le watchdog redemarre.
+            if compteur % 3 == 0:
+                try:
+                    import activity_logger as alog
+                    alog.log_generic("ALIVE", f"tick alive #{compteur}")
+                except Exception:
+                    pass
+
             # E-memento : scanner le log dslrBooth toutes les 3 secondes
             # (le heartbeat tourne toutes les 60s, mais e-memento doit être réactif)
             for sec in range(self._interval):
@@ -220,22 +247,10 @@ class MonitoringEngine(QThread):
                 emmento_tick += 1
                 if emmento_tick >= 3:
                     emmento_tick = 0
-                    try:
-                        self._emmento.tick()
-                    except Exception as e:
-                        print(f"[EMMENTO] Erreur: {e}")
-                    try:
-                        self._cash.tick()
-                    except Exception as e:
-                        print(f"[CASH] Erreur: {e}")
-                    try:
-                        self._printer_counter.tick()
-                    except Exception as e:
-                        print(f"[PRINTER_COUNTER] Erreur: {e}")
-                    try:
-                        self._led.tick()
-                    except Exception as e:
-                        print(f"[LED] Erreur tick: {e}")
+                    _safe_tick(self._emmento.tick, "EMMENTO")
+                    _safe_tick(self._cash.tick, "CASH")
+                    _safe_tick(self._printer_counter.tick, "PRINTER_COUNTER")
+                    _safe_tick(self._led.tick, "LED")
 
         print(f"[MONITORING] Arrêté après {compteur} cycles.")
 

@@ -252,6 +252,20 @@ def _reserver_code(borne_id, session_id, bar, timestamp):
         )
     except Exception:
         pass
+    # Enqueue pour rejeu : la cliente a son code (hash deterministe), mais
+    # Supabase n'a pas la row. Sans rejeu, Manychat ne retrouvera pas la session.
+    if result != "ok":
+        try:
+            from . import pending_queue
+            pending_queue.enqueue("code_reserve", {
+                "session_id": session_id,
+                "code": code_hash,
+                "bar": bar_to_insert,
+                "timestamp": timestamp,
+                "borne_id": borne_id,
+            })
+        except Exception:
+            pass
     return code_hash
 
 
@@ -453,7 +467,22 @@ def _envoyer_supabase(session_id, bar, timestamp, photos, code, originals, borne
             alog.log_supabase_error(session_id, code, str(e))
         time.sleep(2)
 
-    print(f"[EMMENTO] Abandon session {session_id} après 3 tentatives")
+    # 3 tentatives echouees : on enregistre dans le cahier de secours pour
+    # rejeu ulterieur (wifi mort, Supabase down). Incident REV3 22/06/2026.
+    try:
+        from . import pending_queue
+        pending_queue.enqueue("session_update", {
+            "session_id": session_id,
+            "code": code,
+            "bar": bar,
+            "timestamp": timestamp,
+            "photos": [os.path.basename(p) for p in (photos or [])],
+            "originals": [os.path.basename(p) for p in (originals or [])],
+            "borne_id": borne_id,
+        })
+        print(f"[EMMENTO] Session {session_id} mise en file d'attente locale (3 echecs Supabase)")
+    except Exception as e:
+        print(f"[EMMENTO] Enqueue echec: {e}")
     return False
 
 
@@ -527,9 +556,77 @@ class EmentoWatcher:
         except Exception:
             pass
 
+    def _replay_pending(self):
+        """Tente de rejouer les sessions en attente dans le cahier de secours.
+        Max 3 par tick pour ne pas bloquer le thread monitoring."""
+        try:
+            from . import pending_queue
+        except Exception:
+            return
+        items = pending_queue.peek()
+        if not items:
+            return
+        traites = items[:3]
+        restants = items[3:]
+        for entry in traites:
+            kind = entry.get("kind")
+            p = entry.get("payload") or {}
+            try:
+                if kind == "code_reserve":
+                    data = {
+                        "session_id": p["session_id"],
+                        "code": p["code"],
+                        "bar": p.get("bar") or "inconnu",
+                        "timestamp": p["timestamp"],
+                        "photos": json.dumps([]),
+                        "originals": json.dumps([]),
+                        "statut": "en_attente",
+                    }
+                    if p.get("borne_id"):
+                        data["borne_id"] = p["borne_id"]
+                    r = requests.post(
+                        f"{supa.SUPABASE_URL}/rest/v1/ememento?on_conflict=session_id",
+                        headers=HEADERS_UPSERT, json=data, timeout=5,
+                    )
+                    ok = r.status_code in (200, 201, 409)
+                elif kind == "session_update":
+                    data = {
+                        "session_id": p["session_id"],
+                        "code": p["code"],
+                        "bar": p.get("bar") or "inconnu",
+                        "timestamp": p["timestamp"],
+                        "photos": json.dumps(p.get("photos") or []),
+                        "originals": json.dumps(p.get("originals") or []),
+                        "statut": "en_attente",
+                    }
+                    if p.get("borne_id"):
+                        data["borne_id"] = p["borne_id"]
+                    r = requests.post(
+                        f"{supa.SUPABASE_URL}/rest/v1/ememento?on_conflict=session_id",
+                        headers=HEADERS_UPSERT, json=data, timeout=5,
+                    )
+                    ok = r.status_code in (200, 201, 409)
+                else:
+                    ok = True  # kind inconnu = on droppe
+            except Exception:
+                ok = False
+            if not ok:
+                entry["retry_count"] = entry.get("retry_count", 0) + 1
+                restants.append(entry)
+            else:
+                try:
+                    import activity_logger as alog
+                    alog.log_generic("PENDING", f"Replay OK {kind} session={p.get('session_id', '?')[:12]}")
+                except Exception:
+                    pass
+        if len(restants) != len(items):
+            pending_queue.replace_all(restants)
+
     def tick(self):
         """Appelé à chaque cycle du monitoring (~3s).
         Lit les nouvelles lignes du log dslrBooth + traite les re-scans."""
+        # Rejeu de la queue locale (sessions perdues quand wifi mort)
+        self._replay_pending()
         # Rescan des sessions deja envoyees pour rattraper les originals
         # movés en retard (race condition dslrbooth)
         self._process_rescans()

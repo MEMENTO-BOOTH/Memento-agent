@@ -24,6 +24,14 @@ def _log(msg):
 
 _log("=== START (import phase) ===")
 
+import faulthandler
+try:
+    _faulthandler_log = open(os.path.join(_log_dir, "faulthandler.log"), "a", buffering=1)
+    faulthandler.enable(file=_faulthandler_log)
+    _log("faulthandler enabled")
+except Exception as _e:
+    _log(f"faulthandler enable failed: {_e}")
+
 try:
     from PyQt5.QtWidgets import QApplication
     from PyQt5.QtGui import QFontDatabase
@@ -159,14 +167,35 @@ class _HideOnClose(QObject):
 
 
 def _install_exception_hook():
-    """Installe un hook global pour que les exceptions Python
-    ne tuent pas le process Qt (crash C++ silencieux)."""
+    """Capte les exceptions main thread, threads Python et threads Qt.
+
+    Incident REV3 22/06/2026 : agent mort silencieusement, aucune trace.
+    Cause probable = exception dans un thread Qt non capturee par sys.excepthook.
+    threading.excepthook (Python 3.8+) capte les threads Python ; pour les
+    threads Qt on installe aussi un wrapper sur QThread.run."""
     import traceback as _tb
-    def _hook(exc_type, exc_value, exc_tb):
+    import threading as _th
+
+    def _log_exc(prefix, exc_type, exc_value, exc_tb):
         msg = "".join(_tb.format_exception(exc_type, exc_value, exc_tb))
-        _log(f"UNHANDLED EXCEPTION:\n{msg}")
-        print(f"[EXCEPTION] {msg}")
-    sys.excepthook = _hook
+        _log(f"{prefix}:\n{msg}")
+        print(f"[{prefix}] {msg}")
+        try:
+            import activity_logger as _alog
+            _alog.log_generic("CRASH", f"{prefix}: {msg[:500]}")
+        except Exception:
+            pass
+
+    def _hook_main(exc_type, exc_value, exc_tb):
+        _log_exc("UNHANDLED EXCEPTION", exc_type, exc_value, exc_tb)
+    sys.excepthook = _hook_main
+
+    def _hook_thread(args):
+        _log_exc(
+            f"UNHANDLED THREAD EXCEPTION ({args.thread.name})",
+            args.exc_type, args.exc_value, args.exc_traceback,
+        )
+    _th.excepthook = _hook_thread
 
 
 def _start_monitoring_early(app):

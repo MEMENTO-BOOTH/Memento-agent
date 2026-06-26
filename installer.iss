@@ -62,6 +62,13 @@ Source: "assets\*"; DestDir: "{app}\assets"; Flags: ignoreversion recursesubdirs
 ; Fichier de configuration .env (ne pas écraser si existe déjà)
 Source: ".env"; DestDir: "{app}"; Flags: onlyifdoesntexist
 
+; Watchdog : surveille MementoAgent.exe et le redemarre s'il crashe.
+; Suite incident REV3 22/06/2026 (44h agent mort, ~15 clients impactes).
+Source: "deploy\watchdog\watchdog.ps1"; DestDir: "{app}\watchdog"; Flags: ignoreversion
+Source: "deploy\watchdog\start-watchdog.vbs"; DestDir: "{app}\watchdog"; Flags: ignoreversion
+Source: "deploy\watchdog\install-watchdog.bat"; DestDir: "{app}\watchdog"; Flags: ignoreversion
+Source: "deploy\watchdog\uninstall-watchdog.bat"; DestDir: "{app}\watchdog"; Flags: ignoreversion
+
 
 [Icons]
 ; Raccourci Bureau
@@ -78,12 +85,17 @@ Name: "{group}\Désinstaller {#MyAppName}"; Filename: "{uninstallexe}"
 Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "MementoAgent"; ValueData: """{app}\{#MyAppExeName}"""; Flags: uninsdeletevalue
 
 [Run]
+; Installer la tache planifiee watchdog (necessite admin, on en a deja les droits)
+Filename: "{app}\watchdog\install-watchdog.bat"; Flags: runhidden waituntilterminated
+; Lancer l'agent
 Filename: "{app}\{#MyAppExeName}"; Description: "Lancer {#MyAppName}"; Flags: nowait postinstall
 
 [UninstallDelete]
 Type: filesandordirs; Name: "{app}"
 
 [UninstallRun]
+; Cleanup complet du watchdog (registry + raccourcis + processus)
+Filename: "{app}\watchdog\uninstall-watchdog.bat"; Flags: runhidden waituntilterminated; RunOnceId: "UninstallWatchdog"
 ; Fermer l'app avant désinstallation
 Filename: "taskkill"; Parameters: "/F /IM {#MyAppExeName}"; Flags: runhidden; RunOnceId: "KillApp"
 
