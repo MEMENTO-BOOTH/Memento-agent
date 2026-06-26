@@ -331,8 +331,9 @@ class PrinterCounterWatcher:
                 f"&impression_verifiee_papier=eq.false"
                 f"&anomalie_impression=is.null"
                 f"&paiement_at=gte.{cutoff}"
+                f"&montant=gt.0"
                 f"&order=paiement_at.asc"
-                f"&select=id,paiement_at,feuilles_avant",
+                f"&select=id,paiement_at,feuilles_avant,carte_4_derniers",
                 headers=supa.HEADERS, timeout=5,
             )
             if r.status_code == 200:
@@ -354,25 +355,17 @@ class PrinterCounterWatcher:
             print(f"[PRINTER_COUNTER] Erreur PATCH {tx_id[:8]}: {e}")
             return False
 
-    def _creer_alerte_non_delivree(self, tx_id, paiement_at=None):
-        """Cree une alerte pour chaque paiement non delivre (pas de dedup).
-
-        L'heure affichee dans le message client est en heure locale (Paris)
-        pour que l'admin retrouve directement la transaction sur le ticket
-        ou la borne. paiement_at est tz-aware (UTC) -> on convertit."""
+    def _creer_alerte_non_delivree(self, tx_id, carte_4_derniers=None):
         bar = self._nom_lieu or "la borne"
-        if paiement_at is not None:
-            local = paiement_at.astimezone() if paiement_at.tzinfo else paiement_at
-            heure = local.strftime("%H:%M")
-        else:
-            heure = datetime.now().strftime("%H:%M")
+        suffixe_carte = f" (**{carte_4_derniers})" if carte_4_derniers else ""
+        message = f"Un client{suffixe_carte} a paye sur {bar} mais sa photo n'est pas sortie de l'imprimante."
         try:
             import requests
             payload = {
                 "borne_id": self._borne_id,
                 "type": "impression_non_delivree",
                 "source": "printer_counter",
-                "message": f"Un client a paye sur {bar} a {heure} mais sa photo n'est pas sortie de l'imprimante.",
+                "message": message,
                 "gravite": "critique",
                 "statut": "ouverte",
                 "timestamp": datetime.now().astimezone().isoformat(),
@@ -385,7 +378,7 @@ class PrinterCounterWatcher:
             )
             import activity_logger as alog
             alog.ui_alerte(
-                f"Un client a paye sur {bar} a {heure} mais sa photo n'est pas sortie",
+                message,
                 "icon_impression_non_delivree.svg",
                 resolved=False,
             )
@@ -520,7 +513,7 @@ class PrinterCounterWatcher:
                     data["feuilles_apres"] = last_known
                 self._patch(tx_id, data)
                 self._resolved.add(tx_id)
-                self._creer_alerte_non_delivree(tx_id, paiement_at)
+                self._creer_alerte_non_delivree(tx_id, tx.get("carte_4_derniers"))
                 print(
                     f"[PRINTER_COUNTER] NON DELIVREE {tx_id[:8]} "
                     f"(feuilles_apres={last_known}, deadline depassee de "
