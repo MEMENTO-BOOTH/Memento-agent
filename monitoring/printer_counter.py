@@ -355,10 +355,15 @@ class PrinterCounterWatcher:
             print(f"[PRINTER_COUNTER] Erreur PATCH {tx_id[:8]}: {e}")
             return False
 
-    def _creer_alerte_non_delivree(self, tx_id, carte_4_derniers=None):
+    def _creer_alerte_non_delivree(self, tx_id, carte_4_derniers=None, paiement_at=None):
         bar = self._nom_lieu or "la borne"
         suffixe_carte = f" (**{carte_4_derniers})" if carte_4_derniers else ""
-        message = f"Un client{suffixe_carte} a paye sur {bar} mais sa photo n'est pas sortie de l'imprimante."
+        if paiement_at is not None:
+            local = paiement_at.astimezone() if paiement_at.tzinfo else paiement_at
+            heure = local.strftime("%H:%M")
+        else:
+            heure = datetime.now().strftime("%H:%M")
+        message = f"Un client{suffixe_carte} a paye sur {bar} a {heure} mais sa photo n'est pas sortie de l'imprimante."
         try:
             import requests
             payload = {
@@ -513,7 +518,7 @@ class PrinterCounterWatcher:
                     data["feuilles_apres"] = last_known
                 self._patch(tx_id, data)
                 self._resolved.add(tx_id)
-                self._creer_alerte_non_delivree(tx_id, tx.get("carte_4_derniers"))
+                self._creer_alerte_non_delivree(tx_id, tx.get("carte_4_derniers"), paiement_at)
                 print(
                     f"[PRINTER_COUNTER] NON DELIVREE {tx_id[:8]} "
                     f"(feuilles_apres={last_known}, deadline depassee de "
