@@ -183,7 +183,7 @@ def _alerte_deja_ouverte(borne_id, type_alerte):
 
 # Types visuellement "warning" : affichés en orange, PAS de page rupture
 # Mais envoyés comme "critique" à Supabase pour déclencher le SMS
-_TYPES_WARNING_VISUEL = {"surchauffe", "papier_bas", "disque_bas", "coupe_incoherente", "crash_relance", "borne_hors_ligne", "impression_non_delivree", "drive_deconnecte", "drive_sync_cassee"}
+_TYPES_WARNING_VISUEL = {"surchauffe", "papier_bas", "disque_bas", "coupe_incoherente", "crash_relance", "borne_hors_ligne", "impression_non_delivree", "drive_deconnecte", "drive_sync_cassee", "borne_eteinte_3_jours"}
 
 
 def _creer_alerte(borne_id, type_alerte, source, message, gravite="critique"):
