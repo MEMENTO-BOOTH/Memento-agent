@@ -32,6 +32,7 @@ from collections import deque
 
 import requests
 import supabase_client as supa
+from .dnp_lock import DNP_PORT_LOCK
 
 
 # --- Configuration ---------------------------------------------------
@@ -112,18 +113,24 @@ class _PrinterHandle:
                     except OSError:
                         break
 
-            for name, port in candidats:
-                h = self.dll.PortInitialize(port)
-                if h >= 0 and self.dll.GetStatus(h) != 0x80000000:
-                    self.name = name
-                    self.port = port
-                    self.h_port = h
-                    return True
-                if h >= 0:
-                    try:
-                        self.dll.PortRelease(h)
-                    except Exception:
-                        pass
+            # PortInitialize + PortRelease serialises via DNP_PORT_LOCK pour
+            # ne pas entrer en conflit avec le collector heartbeat. Sans ce
+            # lock, quand printer_counter poll toutes les 3s et que le
+            # heartbeat tombe pile au meme moment, l'un des deux echoue et
+            # l'agent conclut a une 'Imprimante deconnectee' (fausse alerte).
+            with DNP_PORT_LOCK:
+                for name, port in candidats:
+                    h = self.dll.PortInitialize(port)
+                    if h >= 0 and self.dll.GetStatus(h) != 0x80000000:
+                        self.name = name
+                        self.port = port
+                        self.h_port = h
+                        return True
+                    if h >= 0:
+                        try:
+                            self.dll.PortRelease(h)
+                        except Exception:
+                            pass
             return False
         except Exception as e:
             print(f"[PRINTER_COUNTER] Erreur init DLL: {e}")
@@ -146,28 +153,34 @@ class _PrinterHandle:
         on calcule un faux drop massif (ex: 353 -> 0 = 353 photos sorties).
         Resultat observe sur Latina Cafe le 14/06 : 3566 photos faussement
         comptees pour ~10 vraies sorties. -> on filtre counter <= 0 = None.
+
+        Toute la sequence open+read+close tourne sous DNP_PORT_LOCK pour
+        que le collector heartbeat ne tente pas de PortInitialize pendant
+        qu'on tient le port (sinon il conclut a une deconnexion).
         """
-        if not self.open():
-            return None, None
-        try:
-            counter = self.dll.GetMediaCounter(self.h_port)
-            status = self.dll.GetStatus(self.h_port)
-            self.close()
-            return (
-                counter if counter > 0 else None,
-                status if status != 0x80000000 else None,
-            )
-        except Exception:
-            self.close()
-            return None, None
+        with DNP_PORT_LOCK:
+            if not self.open():
+                return None, None
+            try:
+                counter = self.dll.GetMediaCounter(self.h_port)
+                status = self.dll.GetStatus(self.h_port)
+                self.close()
+                return (
+                    counter if counter > 0 else None,
+                    status if status != 0x80000000 else None,
+                )
+            except Exception:
+                self.close()
+                return None, None
 
     def close(self):
-        if self.dll and self.h_port >= 0:
-            try:
-                self.dll.PortRelease(self.h_port)
-            except Exception:
-                pass
-        self.h_port = -1
+        with DNP_PORT_LOCK:
+            if self.dll and self.h_port >= 0:
+                try:
+                    self.dll.PortRelease(self.h_port)
+                except Exception:
+                    pass
+            self.h_port = -1
 
 
 # --- Watcher principal -----------------------------------------------

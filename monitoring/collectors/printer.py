@@ -4,6 +4,7 @@ Extrait de remontee_finale_1.0.0.pyw — fonctionne uniquement sur Windows."""
 import os
 import platform
 from ..alertes.constants import BASE_PRINTER_NAME, STATUS_MAP, is_ds620
+from ..dnp_lock import DNP_PORT_LOCK
 
 
 def lire_imprimante():
@@ -72,67 +73,73 @@ def lire_imprimante():
             result["imprimante_statut"] = "Imprimante non trouvée"
             return result
 
-        # Tester chaque port — prendre celle qui répond (pas 0x80000000)
-        h_port = -1
-        for name, port in all_printers:
-            h = dll.PortInitialize(port)
-            if h >= 0:
-                dll.GetStatus.argtypes = [ctypes.c_int]
-                dll.GetStatus.restype = ctypes.c_uint
-                st = dll.GetStatus(h)
-                if st != 0x80000000:
-                    # Cette imprimante répond
-                    printer_name = name
-                    printer_port = port
-                    h_port = h
-                    break
-                # Sinon essayer la suivante
+        # Tout ce qui touche a la DLL DNP passe par DNP_PORT_LOCK pour ne pas
+        # entrer en conflit avec le PrinterCounterWatcher (qui poll toutes
+        # les 3s). Sans ce lock : le collecteur echoue PortInitialize quand
+        # le port est deja pris -> fausse alerte 'Imprimante deconnectee'.
+        with DNP_PORT_LOCK:
+            # Tester chaque port — prendre celle qui répond (pas 0x80000000)
+            h_port = -1
+            for name, port in all_printers:
+                h = dll.PortInitialize(port)
+                if h >= 0:
+                    dll.GetStatus.argtypes = [ctypes.c_int]
+                    dll.GetStatus.restype = ctypes.c_uint
+                    st = dll.GetStatus(h)
+                    if st != 0x80000000:
+                        # Cette imprimante répond
+                        printer_name = name
+                        printer_port = port
+                        h_port = h
+                        break
+                    # Sinon essayer la suivante
 
-        # Si aucune n'a répondu, prendre la première quand même
-        if h_port < 0:
-            printer_name, printer_port = all_printers[0]
-            h_port = dll.PortInitialize(printer_port)
+            # Si aucune n'a répondu, prendre la première quand même
+            if h_port < 0:
+                printer_name, printer_port = all_printers[0]
+                h_port = dll.PortInitialize(printer_port)
 
-        result["nom_imprimante"] = printer_name
+            result["nom_imprimante"] = printer_name
 
-        if h_port < 0:
-            result["imprimante_statut"] = "Imprimante déconnectée"
-            return result
+            if h_port < 0:
+                result["imprimante_statut"] = "Imprimante déconnectée"
+                return result
 
-        # Statut
-        dll.GetStatus.argtypes = [ctypes.c_int]
-        dll.GetStatus.restype = ctypes.c_uint
-        status = dll.GetStatus(h_port)
-        result["imprimante_statut_code"] = status
-        result["imprimante_statut"] = STATUS_MAP.get(status, f"Inconnu (0x{status:X})")
+            # Statut
+            dll.GetStatus.argtypes = [ctypes.c_int]
+            dll.GetStatus.restype = ctypes.c_uint
+            status = dll.GetStatus(h_port)
+            result["imprimante_statut_code"] = status
+            result["imprimante_statut"] = STATUS_MAP.get(status, f"Inconnu (0x{status:X})")
 
-        # Feuilles restantes
-        dll.GetMediaCounter.argtypes = [ctypes.c_int]
-        dll.GetMediaCounter.restype = ctypes.c_int
-        feuilles = dll.GetMediaCounter(h_port)
-        result["feuilles_restantes"] = feuilles if feuilles >= 0 else None
+            # Feuilles restantes
+            dll.GetMediaCounter.argtypes = [ctypes.c_int]
+            dll.GetMediaCounter.restype = ctypes.c_int
+            feuilles = dll.GetMediaCounter(h_port)
+            result["feuilles_restantes"] = feuilles if feuilles >= 0 else None
 
-        # Serial
-        try:
-            buf = ctypes.create_string_buffer(256)
-            dll.GetSerialNo.argtypes = [ctypes.c_int, ctypes.c_char_p]
-            dll.GetSerialNo.restype = ctypes.c_int
-            if dll.GetSerialNo(h_port, buf) >= 0:
-                serial = buf.value.decode("ascii", errors="ignore").strip()
-                if serial:
-                    result["serial_imprimante"] = serial
-        except Exception:
-            pass
+            # Serial
+            try:
+                buf = ctypes.create_string_buffer(256)
+                dll.GetSerialNo.argtypes = [ctypes.c_int, ctypes.c_char_p]
+                dll.GetSerialNo.restype = ctypes.c_int
+                if dll.GetSerialNo(h_port, buf) >= 0:
+                    serial = buf.value.decode("ascii", errors="ignore").strip()
+                    if serial:
+                        result["serial_imprimante"] = serial
+            except Exception:
+                pass
+
+            # Libérer
+            try:
+                dll.PortRelease(h_port)
+            except Exception:
+                pass
 
         # Mode coupe — lire le flag fichier (pas le registre HKLM qui ne reflète pas la clé utilisateur)
+        # (hors lock : ne touche pas a la DLL DNP)
         from monitoring.coupe_2pouces.coupe import est_coupe_active
         result["mode_coupe"] = "Coupe activée" if est_coupe_active() else "Coupe désactivée"
-
-        # Libérer
-        try:
-            dll.PortRelease(h_port)
-        except Exception:
-            pass
 
     except Exception as e:
         result["imprimante_statut"] = f"Erreur: {e}"
