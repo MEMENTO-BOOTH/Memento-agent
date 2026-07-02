@@ -185,6 +185,12 @@ def _alerte_deja_ouverte(borne_id, type_alerte):
 # Mais envoyés comme "critique" à Supabase pour déclencher le SMS
 _TYPES_WARNING_VISUEL = {"surchauffe", "papier_bas", "disque_bas", "coupe_incoherente", "crash_relance", "borne_hors_ligne", "impression_non_delivree", "drive_deconnecte", "drive_sync_cassee", "borne_eteinte_3_jours"}
 
+# Types envoyés à Supabase en gravité "warning" au lieu de "critique" :
+# affichés sur le dashboard mais NE DECLENCHENT PAS le SMS. Les alertes
+# Drive sont majoritairement de faux positifs / hiccups transitoires qui
+# se resolvent d'eux-memes -> pas de valeur ajoutee d'alerter par SMS.
+_TYPES_NO_SMS = {"drive_deconnecte", "drive_sync_cassee"}
+
 
 def _creer_alerte(borne_id, type_alerte, source, message, gravite="critique"):
     try:
@@ -225,13 +231,15 @@ def _creer_alerte(borne_id, type_alerte, source, message, gravite="critique"):
         if gravite_visuelle == "critique" and _on_alerte_critique:
             _on_alerte_critique(True)
 
-        # 2. ENSUITE envoyer à Supabase — TOUJOURS "critique" pour déclencher le SMS
+        # 2. ENSUITE envoyer à Supabase — gravité "warning" pour les types
+        # qui ne doivent pas déclencher de SMS (drive_*), "critique" sinon.
+        gravite_supabase = "warning" if type_alerte in _TYPES_NO_SMS else "critique"
         payload = {
             "borne_id": borne_id,
             "type": type_alerte,
             "source": source,
             "message": message,
-            "gravite": "critique",
+            "gravite": gravite_supabase,
             "statut": "ouverte",
             "timestamp": datetime.now().astimezone().isoformat(),
         }
