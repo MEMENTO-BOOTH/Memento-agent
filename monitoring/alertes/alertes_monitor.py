@@ -376,8 +376,9 @@ def verifier_alertes(borne_id, nom_lieu, donnees):
     # Statut normal → résoudre les alertes imprimante
     if status and status in CODES_NORMAUX:
         _resoudre_alertes(borne_id, [
-            "bourrage_papier", "fin_papier", "fin_ruban",
-            "capot_ouvert", "bac_chutes_plein", "erreur_mecanique", "surchauffe",
+            "bourrage_papier", "fin_papier", "fin_ruban", "erreur_ruban",
+            "capot_ouvert", "bac_chutes_plein", "erreur_mecanique", "erreur_donnees",
+            "surchauffe",
         ])
 
     # ══════════════════════════════════════════════
