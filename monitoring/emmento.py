@@ -97,176 +97,26 @@ def _load_code_config():
     return cfg
 
 
-def _fetch_existing_code(session_id):
-    """Recupere le code deja attribue a une session_id en base. Utilise quand
-    l'INSERT echoue avec un conflit sur session_id (= session deja inseree
-    lors d'un run precedent de l'agent : restart, auto-update, etc.).
-
-    Retourne le code ou None si la requete echoue (Supabase down, etc.)."""
-    try:
-        r = requests.get(
-            f"{supa.SUPABASE_URL}/rest/v1/ememento"
-            f"?session_id=eq.{session_id}&select=code&limit=1",
-            headers=supa.HEADERS, timeout=10,
-        )
-        if r.status_code == 200 and r.json():
-            return r.json()[0].get("code")
-    except Exception:
-        pass
-    return None
-
-
 def _reserver_code(borne_id, session_id, bar, timestamp):
-    """Reserve atomiquement un code unique dans Supabase. Retourne TOUJOURS
-    un code valide — le client a paye, il doit avoir son ticket.
-
-    Cascade :
-      1. 5 tentatives 7-chars (``secrets.choice``, alphabet CODE_CHARS).
-         INSERT direct. Si 409 sur ``code`` -> retry avec autre code.
-         Si 409 sur ``session_id`` -> session deja en base (restart agent),
-         on GET son code existant et on le retourne (comportement normal,
-         silencieux).
-      2. Fallback 10-chars (30^10 combos, collision astronomique).
-      3. Dernier recours : SHA256(session_id) -> 12 chars deterministe,
-         unique par construction. INSERT tente mais code retourne dans
-         tous les cas.
-
-    **AUCUNE alerte Supabase n'est creee par cette fonction.** Les
-    comportements bizarres sont juste logues localement dans alertes.log
-    pour diagnostic. La contrainte UNIQUE Postgres sur ``code`` garantit
-    l'unicite des codes attribues aux clientes (PK en base, atomique)."""
-    bar_to_insert = bar or "inconnu"
-
-    def _try_insert(code):
-        """Tente l'INSERT. Retourne :
-          ("ok",            None) -> code reserve avec succes
-          ("session_dup",   body) -> session_id deja en base, code existant a recuperer
-          ("code_dup",      body) -> code en collision, retry avec autre code
-          ("err",           body) -> autre erreur (reseau, Supabase down, etc.)
-        """
-        data = {
-            "session_id": session_id,
-            "code": code,
-            "bar": bar_to_insert,
-            "timestamp": timestamp,
-            "photos": json.dumps([]),
-            "originals": json.dumps([]),
-            "statut": "en_attente",
-        }
-        if borne_id:
-            data["borne_id"] = borne_id
-        try:
-            r = requests.post(
-                f"{supa.SUPABASE_URL}/rest/v1/ememento",
-                headers=supa.HEADERS_MINIMAL,
-                json=data,
-                timeout=10,
-            )
-            if r.status_code in (200, 201):
-                return ("ok", None)
-            if r.status_code == 409:
-                body = (r.text or "").lower()
-                # PostgREST renvoie "Key (session_id)=(...) already exists." ou
-                # "Key (code)=(...) already exists." dans le champ "details".
-                if "session_id" in body:
-                    return ("session_dup", r.text)
-                return ("code_dup", r.text)
-            return ("err", f"HTTP {r.status_code}: {(r.text or '')[:120]}")
-        except Exception as e:
-            return ("err", str(e))
-
-    # ── Etape 1 : 5 tentatives avec code 7-chars standard ──────────────
-    for tentative in range(1, 6):
+    from . import code_pool
+    code = code_pool.pop_code()
+    if code is None:
         code = "".join(secrets.choice(CODE_CHARS) for _ in range(CODE_LENGTH))
-        result, info = _try_insert(code)
-        if result == "ok":
-            return code
-        if result == "session_dup":
-            # Cas normal au restart agent : session deja en base. On lit son
-            # code existant et on le retourne silencieusement.
-            existing = _fetch_existing_code(session_id)
-            if existing:
-                try:
-                    import activity_logger as alog
-                    alog.log_generic(
-                        "EMMENTO",
-                        f"Session {session_id} deja en base (restart agent), "
-                        f"code existant recupere : {existing}",
-                    )
-                except Exception:
-                    pass
-                return existing
-            # Si on n'arrive pas a lire le code existant (Supabase a moitie down),
-            # on continue la cascade — au pire on tombera sur le hash a l'etape 3
-            # qui sera deterministe a partir du session_id.
-            print(f"[EMMENTO] Session {session_id} en base mais GET code echoue, "
-                  f"on continue la cascade")
-            continue
-        # result in ("code_dup", "err") -> retry avec autre code
-        print(f"[EMMENTO] Tentative {tentative}/5 echouee ({result}), retry")
-
-    # ── Etape 2 : fallback 10-chars (collision quasi nulle) ────────────
-    code_long = "".join(secrets.choice(CODE_CHARS) for _ in range(10))
-    result, _ = _try_insert(code_long)
-    if result == "ok":
         try:
             import activity_logger as alog
-            alog.log_generic(
-                "EMMENTO",
-                f"7-chars sature apres 5 tentatives, fallback 10-chars "
-                f"(session {session_id}, code={code_long})",
-            )
+            alog.log_generic("POOL", f"pool vide, code fallback local : {code}")
         except Exception:
             pass
-        return code_long
-    if result == "session_dup":
-        existing = _fetch_existing_code(session_id)
-        if existing:
-            return existing
-
-    # ── Etape 3 : SHA256(session_id) -> 12 chars deterministe ──────────
-    # Cas extreme (Supabase tres degrade). Le code est deterministe, donc
-    # unique par construction puisque session_id est unique par session.
-    import hashlib
-    h = hashlib.sha256(session_id.encode("utf-8")).digest()
-    n = int.from_bytes(h[:10], "big")  # 80 bits
-    base = len(CODE_CHARS)
-    chars_list = []
-    for _ in range(12):
-        chars_list.append(CODE_CHARS[n % base])
-        n //= base
-    code_hash = "".join(chars_list)
-    result, _ = _try_insert(code_hash)
-    if result == "session_dup":
-        # Si meme avec le hash on a un session_dup, on lit le code existant
-        existing = _fetch_existing_code(session_id)
-        if existing:
-            return existing
-    try:
-        import activity_logger as alog
-        alog.log_generic(
-            "EMMENTO",
-            f"Cascade complete : 10-chars + hash echoue (Supabase probablement "
-            f"down). Code hash retourne quand meme : session={session_id}, "
-            f"code={code_hash}, insert_result={result}",
-        )
-    except Exception:
-        pass
-    # Enqueue pour rejeu : la cliente a son code (hash deterministe), mais
-    # Supabase n'a pas la row. Sans rejeu, Manychat ne retrouvera pas la session.
-    if result != "ok":
-        try:
-            from . import pending_queue
-            pending_queue.enqueue("code_reserve", {
-                "session_id": session_id,
-                "code": code_hash,
-                "bar": bar_to_insert,
-                "timestamp": timestamp,
-                "borne_id": borne_id,
-            })
-        except Exception:
-            pass
-    return code_hash
+    code_pool.pending_link_add(code, {
+        "code": code,
+        "session_id": session_id,
+        "bar": bar or "inconnu",
+        "timestamp": timestamp,
+        "photos": [],
+        "originals": [],
+        "borne_id": borne_id,
+    })
+    return code
 
 
 def _expirer_anciens_codes():
@@ -412,24 +262,36 @@ def _trouver_originals(bar, timestamp_print, timestamp_max=None):
 
 
 def _envoyer_supabase(session_id, bar, timestamp, photos, code, originals, borne_id):
-    """Envoie dans la table ememento (UPSERT sur session_id).
-
-    On envoie uniquement les basenames a Supabase : le workflow n8n cote
-    serveur cherche les fichiers sur Google Drive par nom exact, le fullPath
-    Windows ne lui sert a rien. L'agent garde le fullPath en interne pour
-    pouvoir lire les fichiers sur disque (rescan, drive backup, etc.).
-
-    Garde-fou : on n'insere PAS de row avec bar="inconnu" ou vide. Le n8n
-    n'a rien a en faire et ca pollue la table. Si la session a un vrai print
-    plus tard, l'event print rappellera cette fonction avec un bar valide
-    (UPSERT creera la row a ce moment-la)."""
     if not bar or bar == "inconnu":
-        print(f"[EMMENTO] Insert skippe : bar inconnu pour session {session_id} (code {code})")
+        print(f"[EMMENTO] Push skippe : bar inconnu pour session {session_id} (code {code})")
         try:
             import activity_logger as alog
-            alog.log_generic("EMMENTO", f"Insert skippe, bar inconnu (session {session_id}, code {code})")
+            alog.log_generic("EMMENTO", f"Push skippe, bar inconnu (session {session_id}, code {code})")
         except Exception:
             pass
+        return False
+
+    from . import code_pool
+    code_pool.pending_link_add(code, {
+        "code": code,
+        "session_id": session_id,
+        "bar": bar,
+        "timestamp": timestamp,
+        "photos": [os.path.basename(p) for p in (photos or [])],
+        "originals": [os.path.basename(p) for p in (originals or [])],
+        "borne_id": borne_id,
+    })
+    try:
+        import activity_logger as alog
+        alog.log_supabase_ok(session_id, code, len(photos or []), len(originals or []))
+        alog.ui_log(f"Code {code} enregistre pour push (session {session_id})")
+    except Exception:
+        pass
+    return True
+
+
+def _envoyer_supabase_legacy(session_id, bar, timestamp, photos, code, originals, borne_id):
+    if not bar or bar == "inconnu":
         return False
     data = {
         "session_id": session_id,
@@ -452,23 +314,11 @@ def _envoyer_supabase(session_id, bar, timestamp, photos, code, originals, borne
                 timeout=10,
             )
             if r.status_code in (200, 201):
-                print(f"[EMMENTO] Session {session_id} | code {code} | {len(photos)} prints | OK")
-                import activity_logger as alog
-                alog.log_supabase_ok(session_id, code, len(photos), len(originals or []))
-                alog.ui_log(f"Code {code} envoyé dans Supabase")
                 return True
-            else:
-                print(f"[EMMENTO] Erreur HTTP {r.status_code}: {r.text[:100]}")
-                import activity_logger as alog
-                alog.log_supabase_error(session_id, code, f"HTTP {r.status_code}")
-        except Exception as e:
-            print(f"[EMMENTO] Erreur envoi: {e}")
-            import activity_logger as alog
-            alog.log_supabase_error(session_id, code, str(e))
+        except Exception:
+            pass
         time.sleep(2)
 
-    # 3 tentatives echouees : on enregistre dans le cahier de secours pour
-    # rejeu ulterieur (wifi mort, Supabase down). Incident REV3 22/06/2026.
     try:
         from . import pending_queue
         pending_queue.enqueue("session_update", {
@@ -480,7 +330,6 @@ def _envoyer_supabase(session_id, bar, timestamp, photos, code, originals, borne
             "originals": [os.path.basename(p) for p in (originals or [])],
             "borne_id": borne_id,
         })
-        print(f"[EMMENTO] Session {session_id} mise en file d'attente locale (3 echecs Supabase)")
     except Exception as e:
         print(f"[EMMENTO] Enqueue echec: {e}")
     return False
@@ -515,10 +364,15 @@ class EmentoWatcher:
         try:
             if os.path.exists(DSLRBOOTH_LOG):
                 self._position = os.path.getsize(DSLRBOOTH_LOG)
-                # Récupérer la session en cours (dernier SessionID dans le log)
                 self._charger_session_courante()
         except Exception:
             pass
+        try:
+            from . import code_pool
+            code_pool.refill_if_needed(borne_id)
+            code_pool.start_background_refill(borne_id)
+        except Exception as e:
+            print(f"[EMMENTO] Init code_pool echoue: {e}")
 
     def _default_bar(self):
         """Bar a utiliser par defaut quand aucun print n'a encore revele le
@@ -623,12 +477,12 @@ class EmentoWatcher:
             pending_queue.replace_all(restants)
 
     def tick(self):
-        """Appelé à chaque cycle du monitoring (~3s).
-        Lit les nouvelles lignes du log dslrBooth + traite les re-scans."""
-        # Rejeu de la queue locale (sessions perdues quand wifi mort)
+        try:
+            from . import code_pool
+            code_pool.pending_link_flush()
+        except Exception as e:
+            print(f"[EMMENTO] pending_link_flush erreur: {e}")
         self._replay_pending()
-        # Rescan des sessions deja envoyees pour rattraper les originals
-        # movés en retard (race condition dslrbooth)
         self._process_rescans()
 
         if not os.path.exists(DSLRBOOTH_LOG):
