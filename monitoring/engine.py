@@ -17,6 +17,7 @@ from .drive_backup import DriveBackup
 from .cashinterface import CashInterfaceWatcher
 from .printer_counter import PrinterCounterWatcher
 from .led_strip import LedStripWatcher
+from .kapsule_watcher import KapsuleWatcher
 
 
 def _safe_tick(fn, category):
@@ -134,7 +135,8 @@ class MonitoringEngine(QThread):
         )
         drive_folder = f"{self._nom_lieu} ({borne.get('code', socket.gethostname())})"
         self._drive = DriveBackup(drive_folder, self._borne_id)
-        print("[MONITORING] E-memento + CashInterface + PrinterCounter + Drive backup initialisés")
+        self._kapsule = KapsuleWatcher(self._borne_id, self._nom_lieu)
+        print("[MONITORING] E-memento + CashInterface + PrinterCounter + Drive backup + Kapsule initialisés")
 
         # Expirer les anciens codes au démarrage
         try:
@@ -251,6 +253,7 @@ class MonitoringEngine(QThread):
                     _safe_tick(self._cash.tick, "CASH")
                     _safe_tick(self._printer_counter.tick, "PRINTER_COUNTER")
                     _safe_tick(self._led.tick, "LED")
+                    _safe_tick(self._kapsule.tick, "KAPSULE")
 
         print(f"[MONITORING] Arrêté après {compteur} cycles.")
 

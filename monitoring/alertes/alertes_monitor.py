@@ -183,7 +183,7 @@ def _alerte_deja_ouverte(borne_id, type_alerte):
 
 # Types visuellement "warning" : affichés en orange, PAS de page rupture
 # Mais envoyés comme "critique" à Supabase pour déclencher le SMS
-_TYPES_WARNING_VISUEL = {"surchauffe", "papier_bas", "disque_bas", "coupe_incoherente", "crash_relance", "borne_hors_ligne", "impression_non_delivree", "drive_deconnecte", "drive_sync_cassee", "borne_eteinte_3_jours"}
+_TYPES_WARNING_VISUEL = {"surchauffe", "papier_bas", "disque_bas", "coupe_incoherente", "crash_relance", "borne_hors_ligne", "impression_non_delivree", "drive_deconnecte", "drive_sync_cassee", "borne_eteinte_3_jours", "kapsule_crash", "kapsule_ferme", "kapsule_exe_absent", "kapsule_health_illisible"}
 
 # Types envoyés à Supabase en gravité "warning" au lieu de "critique" :
 # affichés sur le dashboard mais NE DECLENCHENT PAS le SMS. Les alertes
@@ -221,6 +221,10 @@ def _creer_alerte(borne_id, type_alerte, source, message, gravite="critique"):
             "disque_bas": "icon_disque_bas.svg",
             "disque_plein": "alert_disque_plein_new.svg",
             "coupe_incoherente": "icon_coupe_incoherente.svg",
+            "kapsule_crash": "alert_crash_dslrbooth.svg",
+            "kapsule_ferme": "alert_crash_dslrbooth.svg",
+            "kapsule_exe_absent": "alert_erreur_mecanique.svg",
+            "kapsule_health_illisible": "alert_erreur_mecanique.svg",
         }
         alog.log_alerte_creee(type_alerte, gravite_visuelle, source, message, borne_id)
         alog.ui_alerte(f"{message}", icon_map.get(type_alerte, "icon_borne_hors_ligne.svg"), resolved=False)

@@ -72,6 +72,7 @@ ALERTES_WARNING = {
 # Tous les types d'alertes gérés
 TOUS_TYPES_ALERTES = [
     "bourrage_papier", "fin_papier", "fin_ruban", "erreur_ruban", "erreur_donnees", "crash_cashinterface",
+    "kapsule_crash", "kapsule_ferme", "kapsule_exe_absent", "kapsule_health_illisible",
     "capot_ouvert", "bac_chutes_plein", "erreur_mecanique",
     "surchauffe", "papier_bas", "camera_deconnectee",
     "crash_dslrbooth", "disque_bas", "disque_plein",
