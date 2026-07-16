@@ -19,12 +19,7 @@ from .printer_counter import PrinterCounterWatcher
 from .led_strip import LedStripWatcher
 from .kapsule_watcher import KapsuleWatcher
 from .kapsule_emmento_watcher import KapsuleEmmentoWatcher
-
-
-def _is_kapsule_borne():
-    return os.path.exists(
-        os.path.join(os.environ.get("APPDATA", ""), "kapsule-bar", "health.json")
-    )
+from .photo_app import is_kapsule_borne
 
 
 def _safe_tick(fn, category):
@@ -71,7 +66,7 @@ class MonitoringEngine(QThread):
         # Sur borne Kapsule, Kapsule pilote directement le Pico via COM —
         # on desactive le watcher pour eviter le conflit sur le port serie.
         self._led = None
-        if not _is_kapsule_borne():
+        if not is_kapsule_borne():
             self._led = LedStripWatcher()
             try:
                 self._led.start()
@@ -121,8 +116,11 @@ class MonitoringEngine(QThread):
         print(f"[MONITORING] Borne: {self._nom_lieu} ({borne.get('code')})")
         print(f"[MONITORING] Intervalle: {self._interval}s")
 
-        # Réactiver la coupe 2 pouces si le flag est actif
-        startup_hardware()
+        # Réactiver la coupe 2 pouces si le flag est actif.
+        # Sur borne Kapsule, Kapsule pilote la coupe DNP lui-meme par job —
+        # on n'y touche pas pour eviter le double acces USB imprimante.
+        if not is_kapsule_borne():
+            startup_hardware()
 
         # Désactiver la mise en veille interne de la DS620 (firmware).
         # Inconditionnel, idempotent, pas d'UAC (appel DLL direct USB).

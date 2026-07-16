@@ -482,11 +482,16 @@ def verifier_alertes(borne_id, nom_lieu, donnees):
     # 8. COUPE 2 POUCES — vérifier que le mode est cohérent
     # ══════════════════════════════════════════════
 
-    mode_coupe = donnees.get("mode_coupe")
-    if mode_coupe == "Coupe désactivée":
-        if not _alerte_deja_ouverte(borne_id, "coupe_incoherente"):
-            nom_imp = donnees.get("nom_imprimante") or "imprimante"
-            _creer_alerte(borne_id, "coupe_incoherente", "imprimante",
-                          f"Coupe 2 pouces désactivée sur {nom_imp} ({bar}).", "warning")
-    elif mode_coupe == "Coupe activée":
-        _resoudre_alertes(borne_id, ["coupe_incoherente"])
+    # Sur borne Kapsule, la coupe est pilotée par Kapsule lui-même (par job)
+    # — le flag mode_coupe agent ne reflète plus rien, ce check produirait
+    # un faux positif permanent.
+    from monitoring.photo_app import is_kapsule_borne
+    if not is_kapsule_borne():
+        mode_coupe = donnees.get("mode_coupe")
+        if mode_coupe == "Coupe désactivée":
+            if not _alerte_deja_ouverte(borne_id, "coupe_incoherente"):
+                nom_imp = donnees.get("nom_imprimante") or "imprimante"
+                _creer_alerte(borne_id, "coupe_incoherente", "imprimante",
+                              f"Coupe 2 pouces désactivée sur {nom_imp} ({bar}).", "warning")
+        elif mode_coupe == "Coupe activée":
+            _resoudre_alertes(borne_id, ["coupe_incoherente"])

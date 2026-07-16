@@ -349,6 +349,16 @@ class SettingsWidget(QWidget):
     # ═══════════════════════════════════════════════
 
     def _on_toggle_coupe(self, event):
+        from monitoring.photo_app import is_kapsule_borne
+        if is_kapsule_borne():
+            # Sur borne Kapsule, la coupe est gérée par Kapsule lui-même.
+            # Le toggle agent (kill dslrBooth + reboot spooler) tuerait les
+            # impressions Kapsule en cours.
+            print("[COUPE] Borne Kapsule — toggle coupe agent ignore")
+            from ui_components import toast
+            toast("Coupe pilotee par Kapsule sur cette borne", "warning")
+            return
+
         toggle = self._ref_imp["toggle_coupe"]
         toggle.mousePressEvent_orig(event)
         activate = toggle.is_on()
