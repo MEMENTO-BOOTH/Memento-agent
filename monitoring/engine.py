@@ -18,6 +18,7 @@ from .cashinterface import CashInterfaceWatcher
 from .printer_counter import PrinterCounterWatcher
 from .led_strip import LedStripWatcher
 from .kapsule_watcher import KapsuleWatcher
+from .kapsule_emmento_watcher import KapsuleEmmentoWatcher
 
 
 def _safe_tick(fn, category):
@@ -136,7 +137,8 @@ class MonitoringEngine(QThread):
         drive_folder = f"{self._nom_lieu} ({borne.get('code', socket.gethostname())})"
         self._drive = DriveBackup(drive_folder, self._borne_id)
         self._kapsule = KapsuleWatcher(self._borne_id, self._nom_lieu)
-        print("[MONITORING] E-memento + CashInterface + PrinterCounter + Drive backup + Kapsule initialisés")
+        self._kapsule_emmento = KapsuleEmmentoWatcher(self._borne_id, self._nom_lieu)
+        print("[MONITORING] E-memento + CashInterface + PrinterCounter + Drive backup + Kapsule + KapsuleEmmento initialisés")
 
         # Expirer les anciens codes au démarrage
         try:
@@ -254,6 +256,7 @@ class MonitoringEngine(QThread):
                     _safe_tick(self._printer_counter.tick, "PRINTER_COUNTER")
                     _safe_tick(self._led.tick, "LED")
                     _safe_tick(self._kapsule.tick, "KAPSULE")
+                    _safe_tick(self._kapsule_emmento.tick, "KAPSULE_EMMENTO")
 
         print(f"[MONITORING] Arrêté après {compteur} cycles.")
 

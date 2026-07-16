@@ -7,10 +7,17 @@ import subprocess
 from datetime import datetime, timezone
 
 
-HEALTH_PATH = os.path.join(
-    os.environ.get("LOCALAPPDATA", ""),
-    "Programs", "kapsule-bar", "health.json",
-)
+HEALTH_PATHS = [
+    os.path.join(os.environ.get("APPDATA", ""), "kapsule-bar", "health.json"),
+    os.path.join(os.environ.get("LOCALAPPDATA", ""), "Programs", "kapsule-bar", "health.json"),
+]
+
+
+def _current_health_path():
+    for p in HEALTH_PATHS:
+        if os.path.exists(p):
+            return p
+    return HEALTH_PATHS[0]
 
 FROZEN_THRESHOLD_SEC = 300
 BAD_STATE_ALERT_THRESHOLD_SEC = 300
@@ -39,10 +46,11 @@ class KapsuleWatcher:
             print(f"[KAPSULE] tick erreur: {e}")
 
     def _tick_impl(self):
-        if not os.path.exists(HEALTH_PATH):
+        health_path = _current_health_path()
+        if not os.path.exists(health_path):
             return
 
-        health = self._read_health()
+        health = self._read_health(health_path)
         if health is None:
             self._handle_parse_ko()
             return
@@ -96,9 +104,9 @@ class KapsuleWatcher:
         self._resolve("kapsule_crash")
         self._resolve("kapsule_ferme")
 
-    def _read_health(self):
+    def _read_health(self, path):
         try:
-            with open(HEALTH_PATH, encoding="utf-8-sig") as f:
+            with open(path, encoding="utf-8-sig") as f:
                 data = json.load(f)
             if not isinstance(data, dict):
                 return None
