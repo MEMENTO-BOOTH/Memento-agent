@@ -21,6 +21,12 @@ from .kapsule_watcher import KapsuleWatcher
 from .kapsule_emmento_watcher import KapsuleEmmentoWatcher
 
 
+def _is_kapsule_borne():
+    return os.path.exists(
+        os.path.join(os.environ.get("APPDATA", ""), "kapsule-bar", "health.json")
+    )
+
+
 def _safe_tick(fn, category):
     """Execute fn() en attrapant toute exception et en la loguant dans
     alertes.log avec la stack trace complete. Empeche un crash dans un
@@ -62,11 +68,15 @@ class MonitoringEngine(QThread):
 
         # LED watcher : doit demarrer immediatement (HTTP server requis pour
         # dslrBooth des le 1er capture, meme avant identification borne).
-        self._led = LedStripWatcher()
-        try:
-            self._led.start()
-        except Exception as e:
-            print(f"[LED] Erreur start: {e}")
+        # Sur borne Kapsule, Kapsule pilote directement le Pico via COM —
+        # on desactive le watcher pour eviter le conflit sur le port serie.
+        self._led = None
+        if not _is_kapsule_borne():
+            self._led = LedStripWatcher()
+            try:
+                self._led.start()
+            except Exception as e:
+                print(f"[LED] Erreur start: {e}")
 
     def set_maintenance(self, on):
         """Active/désactive le mode maintenance.
@@ -76,10 +86,11 @@ class MonitoringEngine(QThread):
 
     def stop(self):
         self._running = False
-        try:
-            self._led.stop()
-        except Exception:
-            pass
+        if self._led is not None:
+            try:
+                self._led.stop()
+            except Exception:
+                pass
 
     def run(self):
         # Attendre le réseau
@@ -254,7 +265,8 @@ class MonitoringEngine(QThread):
                     _safe_tick(self._emmento.tick, "EMMENTO")
                     _safe_tick(self._cash.tick, "CASH")
                     _safe_tick(self._printer_counter.tick, "PRINTER_COUNTER")
-                    _safe_tick(self._led.tick, "LED")
+                    if self._led is not None:
+                        _safe_tick(self._led.tick, "LED")
                     _safe_tick(self._kapsule.tick, "KAPSULE")
                     _safe_tick(self._kapsule_emmento.tick, "KAPSULE_EMMENTO")
 
