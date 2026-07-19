@@ -433,7 +433,11 @@ def verifier_alertes(borne_id, nom_lieu, donnees):
     # Sur borne Kapsule, dslrbooth ne tourne jamais → faux positif critique
     # permanent (page rupture + SMS). Le crash de Kapsule est déjà géré par
     # KapsuleWatcher (kapsule_crash/ferme + relance auto, sans SMS).
-    if not kapsule:
+    if kapsule:
+        # Nettoie une alerte crash_dslrbooth legacy éventuelle (creee avant
+        # migration) — sinon elle reste collee au dashboard.
+        _resoudre_alertes(borne_id, ["crash_dslrbooth"])
+    else:
         dslrbooth = donnees.get("dslrbooth_running", False)
         if not dslrbooth:
             if not _alerte_deja_ouverte(borne_id, "crash_dslrbooth"):
@@ -491,7 +495,10 @@ def verifier_alertes(borne_id, nom_lieu, donnees):
     # Sur borne Kapsule, la coupe est pilotée par Kapsule lui-même (par job)
     # — le flag mode_coupe agent ne reflète plus rien, ce check produirait
     # un faux positif permanent.
-    if not kapsule:
+    if kapsule:
+        # Nettoie une alerte coupe_incoherente legacy éventuelle.
+        _resoudre_alertes(borne_id, ["coupe_incoherente"])
+    else:
         mode_coupe = donnees.get("mode_coupe")
         if mode_coupe == "Coupe désactivée":
             if not _alerte_deja_ouverte(borne_id, "coupe_incoherente"):
