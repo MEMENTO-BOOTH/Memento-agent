@@ -324,6 +324,9 @@ def verifier_alertes(borne_id, nom_lieu, donnees):
         imprimante_statut_code, feuilles_restantes, appareil_connecte,
         dslrbooth_running, disque_libre_go, ssid_wifi
     """
+    from monitoring.photo_app import is_kapsule_borne
+    kapsule = is_kapsule_borne()
+
     status = donnees.get("imprimante_statut_code")
     feuilles = donnees.get("feuilles_restantes")
     bar = nom_lieu or "la borne"
@@ -427,14 +430,17 @@ def verifier_alertes(borne_id, nom_lieu, donnees):
     # ══════════════════════════════════════════════
     # 4. CRASH DSLRBOOTH
     # ══════════════════════════════════════════════
-
-    dslrbooth = donnees.get("dslrbooth_running", False)
-    if not dslrbooth:
-        if not _alerte_deja_ouverte(borne_id, "crash_dslrbooth"):
-            _creer_alerte(borne_id, "crash_dslrbooth", "dslrbooth",
-                          f"DSLRBOOTH ne tourne pas sur {bar}.", "critique")
-    else:
-        _resoudre_alertes(borne_id, ["crash_dslrbooth"])
+    # Sur borne Kapsule, dslrbooth ne tourne jamais → faux positif critique
+    # permanent (page rupture + SMS). Le crash de Kapsule est déjà géré par
+    # KapsuleWatcher (kapsule_crash/ferme + relance auto, sans SMS).
+    if not kapsule:
+        dslrbooth = donnees.get("dslrbooth_running", False)
+        if not dslrbooth:
+            if not _alerte_deja_ouverte(borne_id, "crash_dslrbooth"):
+                _creer_alerte(borne_id, "crash_dslrbooth", "dslrbooth",
+                              f"DSLRBOOTH ne tourne pas sur {bar}.", "critique")
+        else:
+            _resoudre_alertes(borne_id, ["crash_dslrbooth"])
 
     # ══════════════════════════════════════════════
     # 5. CRASH CASH INTERFACE
@@ -485,8 +491,7 @@ def verifier_alertes(borne_id, nom_lieu, donnees):
     # Sur borne Kapsule, la coupe est pilotée par Kapsule lui-même (par job)
     # — le flag mode_coupe agent ne reflète plus rien, ce check produirait
     # un faux positif permanent.
-    from monitoring.photo_app import is_kapsule_borne
-    if not is_kapsule_borne():
+    if not kapsule:
         mode_coupe = donnees.get("mode_coupe")
         if mode_coupe == "Coupe désactivée":
             if not _alerte_deja_ouverte(borne_id, "coupe_incoherente"):
