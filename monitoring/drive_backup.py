@@ -13,6 +13,7 @@ from datetime import datetime
 import supabase_client as supa
 
 from .dslrbooth_config import get_dslrbooth_base
+from .photo_app import is_kapsule_borne
 DSLRBOOTH_BASE = get_dslrbooth_base()
 
 # Mapping reason interne -> (type d'alerte Supabase, gabarit du message client).
@@ -743,6 +744,13 @@ class DriveBackup:
             # api_ok is None -> SA non configure, pas de fichier temoin recent,
             # ou exception API : on n'a pas l'info, on ne touche pas au debounce
             # en cours (un echec persistant continue de courir).
+
+        # Sur borne Kapsule, Kapsule depose lui-meme ses photos sur Drive.
+        # On garde les health-checks Drive ci-dessus (niveaux A/B) — c'est la
+        # surveillance de la sync par PC — mais on ne scanne/copie pas (sinon
+        # doublon + scan a vide de C:\dslrBooth).
+        if is_kapsule_borne():
+            return
 
         # Rattrapage des fichiers a la racine de C:\dslrBooth\ (bug Latina Cafe)
         self._scan_racine()
