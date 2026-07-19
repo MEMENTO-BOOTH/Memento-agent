@@ -215,6 +215,13 @@ def _start_monitoring_early(app):
 
 def _setup_print_overlay(app):
     """Instancie le PrintOverlayManager — affichage overlay lors des impressions."""
+    from monitoring.photo_app import is_kapsule_borne
+    if is_kapsule_borne():
+        # Borne Kapsule : Kapsule affiche son propre écran d'impression, et le
+        # détecteur tiendrait le port DNP ouvert → conflit avec la coupe Kapsule.
+        _log("borne Kapsule — print overlay désactivé")
+        app._overlay_manager = None
+        return
     try:
         from overlay import PrintOverlayManager
         app._overlay_manager = PrintOverlayManager()
