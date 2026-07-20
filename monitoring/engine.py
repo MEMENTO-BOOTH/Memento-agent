@@ -137,7 +137,13 @@ class MonitoringEngine(QThread):
         set_on_alerte_critique(self._on_critique)
 
         # Initialiser e-memento watcher + drive backup
-        self._emmento = EmentoWatcher(self._borne_id, self._nom_lieu)
+        # Sur borne Kapsule, DSLRBOOTH ne tourne pas : ce watcher scanne un log mort
+        # et son __init__ demarre le refill du code_pool (insere des codes "reserve"
+        # inutiles dans ememento). Kapsule genere ses propres codes ;
+        # KapsuleEmmentoWatcher lit deja son ememento.jsonl.
+        self._emmento = None
+        if not is_kapsule_borne():
+            self._emmento = EmentoWatcher(self._borne_id, self._nom_lieu)
         self._cash = CashInterfaceWatcher(self._borne_id)
         self._printer_counter = PrinterCounterWatcher(
             self._borne_id,
@@ -260,7 +266,8 @@ class MonitoringEngine(QThread):
                 emmento_tick += 1
                 if emmento_tick >= 3:
                     emmento_tick = 0
-                    _safe_tick(self._emmento.tick, "EMMENTO")
+                    if self._emmento is not None:
+                        _safe_tick(self._emmento.tick, "EMMENTO")
                     _safe_tick(self._cash.tick, "CASH")
                     _safe_tick(self._printer_counter.tick, "PRINTER_COUNTER")
                     if self._led is not None:
