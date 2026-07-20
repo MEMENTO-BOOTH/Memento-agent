@@ -103,17 +103,72 @@ def open_dashboard(app):
     _log("dashboard.show() done")
 
 
+def _force_foreground(w):
+    """Sur Windows, SetForegroundWindow est bloque quand l'app n'a pas le focus.
+    Bypass via AttachThreadInput/AllowSetForegroundWindow + SetForegroundWindow direct."""
+    try:
+        w.showNormal()
+        w.raise_()
+        w.activateWindow()
+    except Exception:
+        pass
+    try:
+        import ctypes
+        hwnd = int(w.winId())
+        if hwnd:
+            user32 = ctypes.windll.user32
+            SW_RESTORE = 9
+            user32.ShowWindow(hwnd, SW_RESTORE)
+            user32.SetWindowPos(hwnd, -1, 0, 0, 0, 0, 0x0001 | 0x0002 | 0x0040)  # HWND_TOPMOST, NOMOVE|NOSIZE|SHOWWINDOW
+            user32.SetWindowPos(hwnd, -2, 0, 0, 0, 0, 0x0001 | 0x0002 | 0x0040)  # HWND_NOTOPMOST
+            user32.SetForegroundWindow(hwnd)
+    except Exception as e:
+        _log(f"_force_foreground ctypes fail: {e}")
+
+
+def _create_lock(app):
+    """Cree (ou recree) la fenetre LockScreen. Utilise au boot ET par
+    _show_from_tray quand la fenetre existante est zombie (winId == 0)."""
+    from auth import LockScreen
+    lock = LockScreen()
+    screen = app.primaryScreen().availableGeometry()
+    lock.setMinimumSize(min(1050, screen.width()), min(650, screen.height()))
+    lock.resize(min(1184, screen.width()), min(780, screen.height()))
+    lock.setWindowTitle("Memento Agent")
+    lock.unlocked.connect(lambda: _reopen(app))
+    return lock
+
+
 def _show_from_tray(app):
-    """Affiche la fenêtre principale (PIN, dashboard ou setup)."""
+    """Affiche la fenêtre principale (PIN, dashboard ou setup).
+
+    Robuste au cas 'widget zombie' : l'attribut app._lock/dashboard/setup pointe
+    vers un QWidget dont la fenetre native a ete detruite (winId()==0) apres un
+    close+deleteLater precedent. Dans ce cas, showNormal() est un no-op silencieux
+    et le user voit 'rien' quand il clique. On detecte et on recree.
+    """
     for attr in ('_setup', '_dashboard', '_lock'):
         w = getattr(app, attr, None)
-        if w is not None:
-            w.showNormal()
-            w.raise_()
-            w.activateWindow()
-            _log(f"_show_from_tray: showed {attr}")
+        if w is None:
+            continue
+        try:
+            wid = int(w.winId())
+        except Exception:
+            wid = 0
+        if wid:
+            _force_foreground(w)
+            _log(f"_show_from_tray: showed {attr} (winId={wid})")
             return
-    _log("_show_from_tray: no window to show")
+        _log(f"_show_from_tray: {attr} is zombie (winId=0), sera recree")
+
+    # Aucune fenetre viable -> recreer LockScreen fraîche (fallback safe).
+    try:
+        app._lock = _create_lock(app)
+        app._lock.show()
+        _force_foreground(app._lock)
+        _log("_show_from_tray: LockScreen recreee et affichee")
+    except Exception as e:
+        _log(f"_show_from_tray: recreation LockScreen echec: {e}")
 
 
 def _check_single_instance(app):
