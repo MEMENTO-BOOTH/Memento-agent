@@ -145,10 +145,17 @@ class MonitoringEngine(QThread):
         if not is_kapsule_borne():
             self._emmento = EmentoWatcher(self._borne_id, self._nom_lieu)
         self._cash = CashInterfaceWatcher(self._borne_id)
-        self._printer_counter = PrinterCounterWatcher(
-            self._borne_id,
-            self._nom_lieu,
-        )
+        # PrinterCounterWatcher poll la DLL Cx2Stat64 toutes les 3s. Sur borne
+        # Kapsule, Kapsule tient lui-meme le port DNP au moment du print ->
+        # conflit USB -> segfault C qui bypass faulthandler et tue le process
+        # (observe MB-50 : dashboard crash 3s apres ouverture). On desactive
+        # comme _setup_print_overlay en v1.0.28.4.
+        self._printer_counter = None
+        if not is_kapsule_borne():
+            self._printer_counter = PrinterCounterWatcher(
+                self._borne_id,
+                self._nom_lieu,
+            )
         drive_folder = f"{self._nom_lieu} ({borne.get('code', socket.gethostname())})"
         self._drive = DriveBackup(drive_folder, self._borne_id)
         self._kapsule = KapsuleWatcher(self._borne_id, self._nom_lieu)
@@ -269,7 +276,8 @@ class MonitoringEngine(QThread):
                     if self._emmento is not None:
                         _safe_tick(self._emmento.tick, "EMMENTO")
                     _safe_tick(self._cash.tick, "CASH")
-                    _safe_tick(self._printer_counter.tick, "PRINTER_COUNTER")
+                    if self._printer_counter is not None:
+                        _safe_tick(self._printer_counter.tick, "PRINTER_COUNTER")
                     if self._led is not None:
                         _safe_tick(self._led.tick, "LED")
                     _safe_tick(self._kapsule.tick, "KAPSULE")
