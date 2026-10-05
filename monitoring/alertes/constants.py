@@ -10,11 +10,13 @@ SEUIL_DISQUE_BAS = 5.0       # Go
 SEUIL_DISQUE_PLEIN = 1.0     # Go
 SEUIL_HORS_LIGNE_MIN = 5     # minutes sans heartbeat
 
-# Imprimantes DNP — gamme complete (DS620, DS820, DS-RX1, DS40, DS80, QW410...).
-# La DLL Cx2Stat64 (DNP Status Monitor API) est generique DNP, elle fonctionne
-# sur tous ces modeles -> on filtre les imprimantes Windows uniquement sur leur
-# origine DNP ("DP-" prefixe commun, ou "DNP" dans le nom), pas sur le modele.
-PRINTER_PATTERNS = ["DP-", "DNP"]
+# Imprimantes DNP — gamme complete.
+# On matche :
+#  - le prefixe DP- (nom standard DNP Windows: "DP-DS620", "DP-DS-RX1"...)
+#  - "DNP" dans le nom
+#  - Les noms de modeles bruts quand l'utilisateur a renomme l'imprimante
+#    sans le prefixe DP- (observe MB-50 : "DS-RX1" tout court).
+PRINTER_PATTERNS = ["DP-", "DNP", "DS-RX", "DS620", "DS820", "DS40", "DS80", "QW410"]
 
 # Modeles compatibles avec la DLL Cx2Stat64 (DNP Status Monitor API, DS620 series
 # officiellement). Appeler PortInitialize/GetStatus de Cx2Stat64 sur un modele non

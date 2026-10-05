@@ -67,11 +67,19 @@ def lire_imprimante():
             for i in range(100):
                 try:
                     name = winreg.EnumKey(key, i)
-                    if not is_dnp_printer(name):
-                        continue
                     with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, f"{reg}\\{name}") as pk:
                         port, _ = winreg.QueryValueEx(pk, "Port")
-                    if is_cx2stat_compatible(name):
+                        try:
+                            driver, _ = winreg.QueryValueEx(pk, "Printer Driver")
+                        except OSError:
+                            driver = ""
+                    # Robustesse : certains utilisateurs renomment l'imprimante
+                    # (ex "DS-RX1" tout court, sans prefixe DP-). On regarde
+                    # DONC le nom affiche ET le "Printer Driver" du registre
+                    # (reste toujours "DP-DS620", "DP-DS-RX1", etc. meme apres renommage).
+                    if not (is_dnp_printer(name) or is_dnp_printer(driver)):
+                        continue
+                    if is_cx2stat_compatible(name) or is_cx2stat_compatible(driver):
                         all_printers.append((name, port))
                     elif other_dnp_name is None:
                         other_dnp_name = name
