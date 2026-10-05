@@ -1252,7 +1252,17 @@ class DashboardWindow(QMainWindow):
         if hb:
             feuilles = hb.get("feuilles_restantes")
             if feuilles is not None:
-                total = 400  # capacité standard DNP DS620
+                # Capacite dynamique selon le modele d'imprimante (DS620=400,
+                # DS-RX1=700, DS820=230, DS40=400, DS80=260, QW410=230).
+                # Prend d'abord la valeur du heartbeat si fournie, sinon
+                # recalcule a partir du nom.
+                total = hb.get("capacite_imprimante")
+                if not total:
+                    try:
+                        from monitoring.alertes.constants import get_media_capacity
+                        total = get_media_capacity(hb.get("nom_imprimante"))
+                    except Exception:
+                        total = 400
                 self._donut.value = feuilles
                 self._donut.total = total
                 self._donut.update()

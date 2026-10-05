@@ -23,6 +23,31 @@ PRINTER_PATTERNS = ["DP-", "DNP"]
 # cette liste, lire_imprimante retourne le nom seul sans toucher a la DLL.
 CX2STAT_COMPATIBLE_PATTERNS = ["DS620"]
 
+# Capacite media (feuilles 4x6 par defaut) par modele DNP. Utilise pour
+# afficher le compteur / donut cote dashboard quand le modele n'est pas
+# interrogeable via la DLL (ex: DS-RX1 fournit son propre compteur par Kapsule
+# ou on affiche juste la capacite nominale).
+MEDIA_CAPACITY = {
+    "DS620":  400,
+    "DS-RX1": 700,
+    "DSRX1":  700,
+    "DS820":  230,
+    "DS40":   400,
+    "DS80":   260,
+    "QW410":  230,
+}
+
+
+def get_media_capacity(name, default=400):
+    """Retourne la capacite media (feuilles) d'une imprimante DNP par nom."""
+    if not name:
+        return default
+    n = name.upper()
+    for model, cap in MEDIA_CAPACITY.items():
+        if model.upper() in n:
+            return cap
+    return default
+
 
 def is_dnp_printer(name):
     """Vrai si le nom d'imprimante Windows correspond a une DNP (gamme entiere)."""

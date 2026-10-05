@@ -3,7 +3,7 @@ Extrait de remontee_finale_1.0.0.pyw — fonctionne uniquement sur Windows."""
 
 import os
 import platform
-from ..alertes.constants import BASE_PRINTER_NAME, STATUS_MAP, is_ds620, is_dnp_printer, is_cx2stat_compatible
+from ..alertes.constants import BASE_PRINTER_NAME, STATUS_MAP, is_ds620, is_dnp_printer, is_cx2stat_compatible, get_media_capacity
 from ..dnp_lock import DNP_PORT_LOCK
 
 
@@ -16,6 +16,7 @@ def lire_imprimante():
         "imprimante_statut_code": None,
         "feuilles_restantes": None,
         "mode_coupe": None,
+        "capacite_imprimante": 400,  # default DS620, override selon modele detecte
     }
 
     if platform.system() != "Windows":
@@ -77,19 +78,24 @@ def lire_imprimante():
                 except OSError:
                     break
 
+        def _fallback_other_dnp():
+            """Remonte l'imprimante DNP non-DS620 (DS-RX1 etc) en 'En veille'.
+            On ne touche PAS a la DLL (bloque / crash) : on utilise un code
+            status normal (0x10001) pour que le dashboard l'affiche OK et
+            qu'aucune alerte deconnexion ne se declenche."""
+            result["nom_imprimante"] = other_dnp_name
+            result["imprimante_statut"] = "En veille"
+            result["imprimante_statut_code"] = 0x10001
+            result["capacite_imprimante"] = get_media_capacity(other_dnp_name)
+            try:
+                from monitoring.coupe_2pouces.coupe import est_coupe_active
+                result["mode_coupe"] = "Coupe activée" if est_coupe_active() else "Coupe désactivée"
+            except Exception:
+                pass
+
         if not all_printers:
-            # Pas de DS620 : si on a repere une autre DNP (DS-RX1 par ex.), on la
-            # remonte en "degraded" — nom seul, PAS d'appel DLL risque. Statut
-            # non vide ET non alerte critique -> le dashboard reste up, aucun
-            # faux positif 'Erreur generale' ni page de rupture.
             if other_dnp_name:
-                result["nom_imprimante"] = other_dnp_name
-                result["imprimante_statut"] = "DNP non-DS620 (monitoring reduit)"
-                try:
-                    from monitoring.coupe_2pouces.coupe import est_coupe_active
-                    result["mode_coupe"] = "Coupe activée" if est_coupe_active() else "Coupe désactivée"
-                except Exception:
-                    pass
+                _fallback_other_dnp()
                 return result
             result["imprimante_statut"] = "Imprimante non trouvée"
             return result
@@ -115,12 +121,21 @@ def lire_imprimante():
                         break
                     # Sinon essayer la suivante
 
-            # Si aucune n'a répondu, prendre la première quand même
+            # Si TOUTES les DS620 sont fantomes (0x80000000) et qu'une autre DNP
+            # est detectee (DS-RX1 branchee a la place sur un autre USB), c'est
+            # elle la vraie imprimante. On la remonte en degraded plutot que
+            # faux "Erreur generale" / deconnectee.
+            if h_port < 0 and other_dnp_name:
+                _fallback_other_dnp()
+                return result
+
+            # Si aucune n'a répondu et pas d'alternative, prendre la première quand même
             if h_port < 0:
                 printer_name, printer_port = all_printers[0]
                 h_port = dll.PortInitialize(printer_port)
 
             result["nom_imprimante"] = printer_name
+            result["capacite_imprimante"] = get_media_capacity(printer_name)
 
             if h_port < 0:
                 result["imprimante_statut"] = "Imprimante déconnectée"
