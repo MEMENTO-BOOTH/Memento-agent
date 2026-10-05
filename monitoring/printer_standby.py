@@ -40,7 +40,7 @@ import logging
 DEFAULT_STANDBY_MIN = 10
 
 # Patterns pour matcher la DS620 dans le registre Windows
-PRINTER_PATTERNS = ["DP-DS620", "DNP-DS620", "DNP DS620", "DS620"]
+PRINTER_PATTERNS = ["DP-", "DNP"]
 
 
 def _find_dll():

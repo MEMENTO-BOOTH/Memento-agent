@@ -24,7 +24,7 @@ logging.basicConfig(
     format="%(asctime)s %(message)s", datefmt="%Y-%m-%d %H:%M:%S",
 )
 
-PRINTER_PATTERNS = ["DP-DS620", "DNP-DS620", "DNP DS620", "DS620"]
+PRINTER_PATTERNS = ["DP-", "DNP"]
 CUTTERCONTROL_DEVMODE_OFFSET = 282
 CMODE_2INCHCUT = 120
 CMODE_STANDARD = 0

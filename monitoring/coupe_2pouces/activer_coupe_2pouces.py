@@ -14,7 +14,7 @@ import platform
 # ===========================================================
 # Configuration
 # ===========================================================
-PRINTER_PATTERNS = ["DP-DS620", "DNP-DS620", "DNP DS620", "DS620"]
+PRINTER_PATTERNS = ["DP-", "DNP"]
 
 def _is_ds620(name):
     n = name.upper()

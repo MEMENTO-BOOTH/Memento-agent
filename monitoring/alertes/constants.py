@@ -10,15 +10,22 @@ SEUIL_DISQUE_BAS = 5.0       # Go
 SEUIL_DISQUE_PLEIN = 1.0     # Go
 SEUIL_HORS_LIGNE_MIN = 5     # minutes sans heartbeat
 
-# Imprimante DNP DS620 — tous les noms possibles
-PRINTER_PATTERNS = ["DP-DS620", "DNP-DS620", "DNP DS620", "DS620"]
+# Imprimantes DNP — gamme complete (DS620, DS820, DS-RX1, DS40, DS80, QW410...).
+# La DLL Cx2Stat64 (DNP Status Monitor API) est generique DNP, elle fonctionne
+# sur tous ces modeles -> on filtre les imprimantes Windows uniquement sur leur
+# origine DNP ("DP-" prefixe commun, ou "DNP" dans le nom), pas sur le modele.
+PRINTER_PATTERNS = ["DP-", "DNP"]
 
-def is_ds620(name):
-    """Vérifie si le nom correspond à une DS620 (y compris Copie 1, Copie 2...)."""
+def is_dnp_printer(name):
+    """Vrai si le nom d'imprimante Windows correspond a une DNP (gamme entiere)."""
     n = name.upper()
     return any(p.upper() in n for p in PRINTER_PATTERNS)
 
-# Compatibilité ancienne
+# Alias de compat : les anciens imports is_ds620 continuent de fonctionner,
+# mais la fonction accepte maintenant tous les modeles DNP.
+is_ds620 = is_dnp_printer
+
+# Compatibilite ancienne
 BASE_PRINTER_NAME = "DP-DS620"
 
 # Codes statut imprimante → label humain
