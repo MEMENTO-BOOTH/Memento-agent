@@ -24,7 +24,9 @@ logging.basicConfig(
     format="%(asctime)s %(message)s", datefmt="%Y-%m-%d %H:%M:%S",
 )
 
-PRINTER_PATTERNS = ["DP-", "DNP"]
+# Appel direct de Cx2Stat64.dll -> on reste STRICTEMENT DS620 (segfault
+# possible sur modeles non supportes comme DS-RX1).
+PRINTER_PATTERNS = ["DP-DS620", "DNP-DS620", "DNP DS620", "DS620"]
 CUTTERCONTROL_DEVMODE_OFFSET = 282
 CMODE_2INCHCUT = 120
 CMODE_STANDARD = 0

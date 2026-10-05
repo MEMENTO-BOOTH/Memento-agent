@@ -66,9 +66,14 @@ def _find_dll():
 
 
 def _is_ds620(name):
-    from .alertes.constants import PRINTER_PATTERNS
-    n = name.upper()
-    return any(p.upper() in n for p in PRINTER_PATTERNS)
+    # IMPORTANT: ce watcher polle la DLL Cx2Stat64 toutes les 3s. On NE DOIT
+    # appeler PortInitialize que sur une DS620 reellement supportee par la DLL.
+    # Appeler sur DS-RX1 (ou autres DNP non-DS620) peut provoquer un segfault
+    # natif qui tue le process agent entier (observe v1.0.28.9 sur MB-50).
+    # On garde donc le filtrage specifique DS620 ici, pas la detection DNP
+    # generique.
+    from .alertes.constants import is_cx2stat_compatible
+    return is_cx2stat_compatible(name)
 
 
 class _PrinterHandle:

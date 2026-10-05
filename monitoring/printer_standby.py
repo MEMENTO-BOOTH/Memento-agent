@@ -40,7 +40,10 @@ import logging
 DEFAULT_STANDBY_MIN = 10
 
 # Patterns pour matcher la DS620 dans le registre Windows
-PRINTER_PATTERNS = ["DP-", "DNP"]
+# IMPORTANT: ce script appelle PortInitialize/SetStandbyTime sur chaque imprimante
+# matchee -> on DOIT rester strictement DS620 (seul modele garanti par Cx2Stat64).
+# Un appel sur DS-RX1 peut segfault le process (observe v1.0.28.9 sur MB-50).
+PRINTER_PATTERNS = ["DP-DS620", "DNP-DS620", "DNP DS620", "DS620"]
 
 
 def _find_dll():

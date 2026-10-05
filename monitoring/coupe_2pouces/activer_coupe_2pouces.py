@@ -14,7 +14,9 @@ import platform
 # ===========================================================
 # Configuration
 # ===========================================================
-PRINTER_PATTERNS = ["DP-", "DNP"]
+# Appel direct de Cx2Stat64.dll -> on reste STRICTEMENT DS620 (segfault
+# possible sur modeles non supportes comme DS-RX1).
+PRINTER_PATTERNS = ["DP-DS620", "DNP-DS620", "DNP DS620", "DS620"]
 
 def _is_ds620(name):
     n = name.upper()

@@ -16,10 +16,27 @@ SEUIL_HORS_LIGNE_MIN = 5     # minutes sans heartbeat
 # origine DNP ("DP-" prefixe commun, ou "DNP" dans le nom), pas sur le modele.
 PRINTER_PATTERNS = ["DP-", "DNP"]
 
+# Modeles compatibles avec la DLL Cx2Stat64 (DNP Status Monitor API, DS620 series
+# officiellement). Appeler PortInitialize/GetStatus de Cx2Stat64 sur un modele non
+# liste ici peut provoquer un segfault natif (ex: observe sur DS-RX1, v1.0.28.9
+# -> dashboard blanc + process tue). On protege : si le modele n'est pas dans
+# cette liste, lire_imprimante retourne le nom seul sans toucher a la DLL.
+CX2STAT_COMPATIBLE_PATTERNS = ["DS620"]
+
+
 def is_dnp_printer(name):
     """Vrai si le nom d'imprimante Windows correspond a une DNP (gamme entiere)."""
     n = name.upper()
     return any(p.upper() in n for p in PRINTER_PATTERNS)
+
+
+def is_cx2stat_compatible(name):
+    """Vrai si cette imprimante accepte sans risque les appels de Cx2Stat64.dll
+    (DS620 series). Les autres modeles DNP sont detectes (voir is_dnp_printer)
+    mais on ne lit pas leur statut via cette DLL pour eviter un crash natif."""
+    n = (name or "").upper()
+    return any(p.upper() in n for p in CX2STAT_COMPATIBLE_PATTERNS)
+
 
 # Alias de compat : les anciens imports is_ds620 continuent de fonctionner,
 # mais la fonction accepte maintenant tous les modeles DNP.

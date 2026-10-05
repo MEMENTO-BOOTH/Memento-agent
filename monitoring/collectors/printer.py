@@ -3,7 +3,7 @@ Extrait de remontee_finale_1.0.0.pyw — fonctionne uniquement sur Windows."""
 
 import os
 import platform
-from ..alertes.constants import BASE_PRINTER_NAME, STATUS_MAP, is_ds620
+from ..alertes.constants import BASE_PRINTER_NAME, STATUS_MAP, is_ds620, is_dnp_printer, is_cx2stat_compatible
 from ..dnp_lock import DNP_PORT_LOCK
 
 
@@ -56,20 +56,41 @@ def lire_imprimante():
         printer_name = None
         printer_port = None
 
-        # Trouver TOUTES les imprimantes DS620, tester chaque port
-        all_printers = []
+        # Trouver TOUTES les imprimantes DNP (DS620, DS-RX1, DS820, DS40, DS80, QW410...).
+        # On filtre d'abord sur is_dnp_printer puis on separe celles compatibles Cx2Stat64
+        # (DS620) de celles qui ne le sont pas (DS-RX1 etc.) : appeler PortInitialize
+        # de Cx2Stat64 sur une non-DS620 peut segfault le process (observe sur DS-RX1).
+        all_printers = []       # DS620 series, lues via la DLL
+        other_dnp_name = None   # Autre modele DNP present, remonte en degraded sans DLL
         with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, reg) as key:
             for i in range(100):
                 try:
                     name = winreg.EnumKey(key, i)
-                    if is_ds620(name):
-                        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, f"{reg}\\{name}") as pk:
-                            port, _ = winreg.QueryValueEx(pk, "Port")
-                            all_printers.append((name, port))
+                    if not is_dnp_printer(name):
+                        continue
+                    with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, f"{reg}\\{name}") as pk:
+                        port, _ = winreg.QueryValueEx(pk, "Port")
+                    if is_cx2stat_compatible(name):
+                        all_printers.append((name, port))
+                    elif other_dnp_name is None:
+                        other_dnp_name = name
                 except OSError:
                     break
 
         if not all_printers:
+            # Pas de DS620 : si on a repere une autre DNP (DS-RX1 par ex.), on la
+            # remonte en "degraded" — nom seul, PAS d'appel DLL risque. Statut
+            # non vide ET non alerte critique -> le dashboard reste up, aucun
+            # faux positif 'Erreur generale' ni page de rupture.
+            if other_dnp_name:
+                result["nom_imprimante"] = other_dnp_name
+                result["imprimante_statut"] = "DNP non-DS620 (monitoring reduit)"
+                try:
+                    from monitoring.coupe_2pouces.coupe import est_coupe_active
+                    result["mode_coupe"] = "Coupe activée" if est_coupe_active() else "Coupe désactivée"
+                except Exception:
+                    pass
+                return result
             result["imprimante_statut"] = "Imprimante non trouvée"
             return result
 
