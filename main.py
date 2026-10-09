@@ -127,6 +127,15 @@ def open_dashboard(app):
     from dashboard import DashboardWindow
     from auth import LockScreen
 
+    # Avant d'ouvrir le dashboard admin, s'assurer que la page de rupture est
+    # cachee. Une rupture plein ecran deja active au moment ou dashboard.show()
+    # arrive = widget zombie / crash Qt (observe v1.0.28.x sur MB-39, MB-13).
+    try:
+        from rupture_screen import hide_rupture
+        hide_rupture()
+    except Exception:
+        pass
+
     # Passer le monitoring déjà démarré au dashboard
     dashboard = DashboardWindow(monitor=getattr(app, '_monitor', None))
     app._dashboard = dashboard
@@ -345,8 +354,27 @@ def _setup_print_overlay(app):
 
 
 def _on_early_critique(has_critique):
-    """Gère les alertes critiques même avant le dashboard."""
+    """Gère les alertes critiques — affiche la page de rupture plein ecran pour
+    bloquer les CLIENTS devant la borne. MAIS pas quand l'ADMIN est connecte
+    (dashboard ouvert) : il doit pouvoir voir le dashboard pour fixer les alertes.
+    Afficher une page de rupture plein ecran PAR-DESSUS un dashboard admin
+    deja shown provoque un crash Qt (widget zombie / superposition fullscreen)
+    observe sur MB-50, MB-39, MB-13."""
     from rupture_screen import show_rupture, hide_rupture
+    app = QApplication.instance()
+    dash = getattr(app, '_dashboard', None) if app else None
+    admin_visible = False
+    try:
+        admin_visible = dash is not None and dash.isVisible()
+    except Exception:
+        admin_visible = False
+    if admin_visible:
+        # Mode admin : on garde la rupture cachee quoi qu'il arrive, pour que
+        # le dashboard reste stable. L'admin VOIT les alertes critiques dans
+        # l'UI dashboard, pas besoin de les forcer en plein ecran par-dessus.
+        hide_rupture()
+        _log(f"alerte critique ({'ON' if has_critique else 'OFF'}) : dashboard admin ouvert, rupture suppressed")
+        return
     if has_critique:
         show_rupture()
     else:
