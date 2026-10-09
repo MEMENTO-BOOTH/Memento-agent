@@ -24,6 +24,64 @@ def _log(msg):
 
 _log("=== START (import phase) ===")
 
+
+def _boot_alertes_log():
+    """Ecrit une ligne 'BOOT' dans alertes.log DES le lancement, avant tout
+    autre import lourd. But : empecher le watchdog de tuer l'agent pendant
+    la fenetre d'init (environ 60 a 90 s), qui autrement declenchait une
+    boucle de kills -> accumulation de dossiers _MEI PyInstaller -> disque
+    plein (observe MB-39 et MB-13, env 730 Go de _MEI)."""
+    try:
+        from datetime import datetime
+        if hasattr(sys, 'frozen'):
+            log_dir = os.path.dirname(sys.executable)
+        else:
+            log_dir = os.path.join(os.path.expanduser("~"), ".mementoagent")
+        os.makedirs(log_dir, exist_ok=True)
+        ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        with open(os.path.join(log_dir, "alertes.log"), "a", encoding="utf-8") as f:
+            f.write(f"[{ts}] [BOOT] agent demarre, init en cours\n\n")
+    except Exception:
+        pass
+
+
+def _cleanup_mei_orphans():
+    """Supprime les dossiers _MEI* orphelins (> 1 h) dans %TEMP%. PyInstaller
+    (mode onefile) extrait son runtime la a chaque demarrage ; si l'agent est
+    kill brutalement sans PortRelease du bootloader, le dossier reste (209 Mo
+    par instance). Observe sur MB-39 : env 3500 dossiers = 730 Go. On nettoie
+    au boot comme filet de securite (le watchdog nettoie aussi en v1.0.28.14)."""
+    try:
+        from datetime import datetime, timedelta
+        import tempfile, shutil
+        temp = tempfile.gettempdir()
+        cutoff = datetime.now() - timedelta(hours=1)
+        current_mei = getattr(sys, '_MEIPASS', None)
+        n = 0
+        for name in os.listdir(temp):
+            if not name.startswith("_MEI"):
+                continue
+            full = os.path.join(temp, name)
+            if full == current_mei:
+                continue  # le notre, on ne touche pas
+            try:
+                if datetime.fromtimestamp(os.path.getctime(full)) >= cutoff:
+                    continue
+                shutil.rmtree(full, ignore_errors=True)
+                n += 1
+            except Exception:
+                pass
+        if n > 0:
+            _log(f"_MEI cleanup: {n} dossier(s) orphelin(s) supprime(s)")
+    except Exception as e:
+        _log(f"_MEI cleanup: {e}")
+
+
+# Ces deux appels doivent tourner le PLUS TOT possible pour maximiser la
+# chance que le watchdog voie l'agent "vivant" avant son 1er check (3 min).
+_boot_alertes_log()
+_cleanup_mei_orphans()
+
 import faulthandler
 try:
     _faulthandler_log = open(os.path.join(_log_dir, "faulthandler.log"), "a", buffering=1)

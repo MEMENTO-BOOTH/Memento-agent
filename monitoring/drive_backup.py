@@ -8,7 +8,37 @@ import json
 import time
 import shutil
 import sqlite3
+import threading
 from datetime import datetime
+
+
+DRIVE_API_CHECK_TIMEOUT_S = 30
+
+
+def _run_with_timeout(fn, timeout_s, default=None):
+    """Execute fn() dans un thread et attend max timeout_s secondes.
+    Retourne la valeur de fn() en cas de succes, sinon `default`.
+
+    Garde-fou critique : certains appels Google Drive API peuvent HANG
+    indefiniment (DNS lent, mTLS, Drive API down). Sans timeout, le thread
+    monitoring freeze -> alertes.log ne grossit plus -> le watchdog kill
+    l'agent -> boucle de kills -> accumulation _MEI -> disque plein
+    (observe MB-39, MB-13). Le thread fuite si le call ne revient JAMAIS,
+    mais c'est acceptable : le monitoring continue."""
+    result = [default]
+    done = threading.Event()
+    def _wrapper():
+        try:
+            result[0] = fn()
+        except Exception:
+            result[0] = default
+        finally:
+            done.set()
+    t = threading.Thread(target=_wrapper, daemon=True)
+    t.start()
+    if done.wait(timeout_s):
+        return result[0]
+    return default
 
 import supabase_client as supa
 
@@ -721,7 +751,9 @@ class DriveBackup:
         if now - self._last_api_check_ts >= API_HEALTH_CHECK_INTERVAL_SEC:
             delta_api = now - self._last_api_check_ts if self._last_api_check_ts else 0
             self._last_api_check_ts = now
-            api_ok = self._drive_api_check()
+            api_ok = _run_with_timeout(
+                self._drive_api_check, DRIVE_API_CHECK_TIMEOUT_S, default=None
+            )
             elapsed_cloud = (now - self._cloud_first_failure_ts) if self._cloud_first_failure_ts else 0
             try:
                 import activity_logger as alog
