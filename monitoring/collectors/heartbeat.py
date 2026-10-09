@@ -85,7 +85,12 @@ def _log_hb(msg):
 def envoyer_heartbeat(borne_id, donnees):
     """UPSERT dans la table heartbeats — une seule ligne par borne."""
     # Retirer les champs qui ne sont pas dans la table heartbeats
-    exclure = {"imprimante_statut_code", "wifi_speed_mbps", "wifi_qualite", "nom_imprimante"}
+    # capacite_imprimante : ajoute en v1.0.28.11 cote lire_imprimante() pour le
+    # donut UI du dashboard local, mais la colonne n'existe pas dans la table
+    # Supabase heartbeats -> POST rejette en 400 et perd silencieusement le
+    # heartbeat (bug observe MB-16/MB-31/MB-37 en v1.0.28.14 : agent tourne
+    # localement, aucun HB n'arrive a Supabase pendant >27 min).
+    exclure = {"imprimante_statut_code", "wifi_speed_mbps", "wifi_qualite", "nom_imprimante", "capacite_imprimante"}
     data = {k: v for k, v in donnees.items() if k not in exclure}
     data["borne_id"] = borne_id
     data["timestamp"] = datetime.now().astimezone().isoformat()
