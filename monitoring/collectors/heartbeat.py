@@ -95,19 +95,35 @@ def envoyer_heartbeat(borne_id, donnees):
     data["borne_id"] = borne_id
     data["timestamp"] = datetime.now().astimezone().isoformat()
 
-    try:
-        r = requests.post(
-            f"{supa.SUPABASE_URL}/rest/v1/heartbeats?on_conflict=borne_id",
-            headers=supa.HEADERS_UPSERT,
-            json=data,
-            timeout=10,
-        )
-        if r.status_code in (200, 201):
-            _log_hb(f"heartbeat OK ({r.status_code})")
-            return True
-        body = r.text[:300] if r.text else ""
-        _log_hb(f"heartbeat FAIL status={r.status_code} body={body}")
-        return False
-    except Exception as e:
-        _log_hb(f"heartbeat EXCEPTION {type(e).__name__}: {e}")
-        return False
+    # Garde-fou : si Supabase refuse en 400 "Could not find column X in schema",
+    # on retire ce champ du payload et on re-POST. Evite de perdre tous les
+    # heartbeats quand une nouvelle colonne (ex. ruban_restant, capacite_imprimante)
+    # est ajoutee cote agent avant d'etre ajoutee cote schema Supabase.
+    import re
+    for attempt in range(3):
+        try:
+            r = requests.post(
+                f"{supa.SUPABASE_URL}/rest/v1/heartbeats?on_conflict=borne_id",
+                headers=supa.HEADERS_UPSERT,
+                json=data,
+                timeout=10,
+            )
+            if r.status_code in (200, 201):
+                _log_hb(f"heartbeat OK ({r.status_code})")
+                return True
+            body = r.text or ""
+            # 400 "Could not find the 'FOO' column of 'heartbeats'" -> retire et retry
+            if r.status_code == 400 and "could not find" in body.lower() and "column" in body.lower():
+                m = re.search(r"'([^']+)' column of 'heartbeats'", body)
+                if m and m.group(1) in data:
+                    missing = m.group(1)
+                    _log_hb(f"heartbeat 400 (col '{missing}' manquante), retry sans ce champ")
+                    del data[missing]
+                    continue
+            _log_hb(f"heartbeat FAIL status={r.status_code} body={body[:300]}")
+            return False
+        except Exception as e:
+            _log_hb(f"heartbeat EXCEPTION {type(e).__name__}: {e}")
+            return False
+    _log_hb("heartbeat FAIL max retries")
+    return False

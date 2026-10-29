@@ -15,6 +15,7 @@ def lire_imprimante():
         "imprimante_statut": None,
         "imprimante_statut_code": None,
         "feuilles_restantes": None,
+        "ruban_restant": None,  # compteur ruban (ribbon) DNP, separe du papier
         "mode_coupe": None,
         "capacite_imprimante": 400,  # default DS620, override selon modele detecte
     }
@@ -156,11 +157,33 @@ def lire_imprimante():
             result["imprimante_statut_code"] = status
             result["imprimante_statut"] = STATUS_MAP.get(status, f"Inconnu (0x{status:X})")
 
-            # Feuilles restantes
+            # Feuilles restantes (papier - media counter DNP)
             dll.GetMediaCounter.argtypes = [ctypes.c_int]
             dll.GetMediaCounter.restype = ctypes.c_int
             feuilles = dll.GetMediaCounter(h_port)
             result["feuilles_restantes"] = feuilles if feuilles >= 0 else None
+
+            # Ruban restant (ribbon counter DNP) — tente plusieurs symboles
+            # possibles de la DLL Cx2Stat64 selon version du SDK. Fallback
+            # sur le code status : 0x10010 = "Fin de ruban" -> 0.
+            ribbon = None
+            for sym in ("GetRibbonCounter", "GetRibbonRemain", "GetMediaRibbonCounter"):
+                fn = getattr(dll, sym, None)
+                if fn is None:
+                    continue
+                try:
+                    fn.argtypes = [ctypes.c_int]
+                    fn.restype = ctypes.c_int
+                    val = fn(h_port)
+                    if val >= 0:
+                        ribbon = val
+                        break
+                except Exception:
+                    continue
+            if ribbon is None and status == 0x10010:
+                # Pas de fonction SDK dispo mais status dit "Fin de ruban".
+                ribbon = 0
+            result["ruban_restant"] = ribbon
 
             # Serial
             try:
