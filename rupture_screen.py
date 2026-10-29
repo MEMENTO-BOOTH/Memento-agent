@@ -6,10 +6,18 @@ from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QLineEdit, QDialog, QApplication,
 )
-from PyQt5.QtCore import Qt, QRectF
+from PyQt5.QtCore import Qt, QRectF, QTimer
 from PyQt5.QtGui import QPainter, QColor, QFont, QPixmap
 
 from paths import ASSETS_DIR
+
+
+# Cadence de re-raise : toutes les 1.5s on force la fenetre devant.
+# Necessaire car Kapsule Bar (Electron kiosk natif fullscreen) reprend
+# le premier plan Windows en continu, et notre WindowStaysOnTopHint seul
+# ne suffit pas face a l'exclusivite kiosk Electron (observe Berliner le
+# 25/10 : alerte fin_ruban invisible pendant 4 jours derriere Kapsule).
+_RAISE_TICK_MS = 1500
 
 
 class RuptureScreen(QWidget):
@@ -21,6 +29,38 @@ class RuptureScreen(QWidget):
         self.setAttribute(Qt.WA_DeleteOnClose, False)
         self.setStyleSheet("background: #020617;")
         self._build()
+        # Timer de re-conquete du premier plan contre Kapsule Bar kiosk.
+        self._raise_timer = QTimer(self)
+        self._raise_timer.setInterval(_RAISE_TICK_MS)
+        self._raise_timer.timeout.connect(self._tick_raise)
+
+    def _tick_raise(self):
+        """Refait raise + activateWindow + SetForegroundWindow natif Windows
+        tant que l'ecran est affiche. Sans ce tick, Kapsule Bar en mode
+        kiosk reprend la main en continu et notre fullscreen devient invisible."""
+        if not self.isVisible():
+            self._raise_timer.stop()
+            return
+        try:
+            self.raise_()
+            self.activateWindow()
+        except Exception:
+            pass
+        # Trick Windows : SetWindowPos HWND_TOPMOST + SetForegroundWindow via
+        # ctypes pour bypasser la restriction foreground sur un process qui
+        # n'a pas le focus (Kapsule kiosk = focus-holder habituel).
+        try:
+            import ctypes
+            hwnd = int(self.winId())
+            if hwnd:
+                u32 = ctypes.windll.user32
+                # SW_RESTORE=9 au cas ou minimizee
+                u32.ShowWindow(hwnd, 9)
+                # HWND_TOPMOST=-1, NOMOVE|NOSIZE|SHOWWINDOW=0x0043
+                u32.SetWindowPos(hwnd, -1, 0, 0, 0, 0, 0x0043)
+                u32.SetForegroundWindow(hwnd)
+        except Exception:
+            pass
 
     def _build(self):
         layout = QVBoxLayout(self)
@@ -249,12 +289,20 @@ class RuptureScreen(QWidget):
         dlg.exec_()
 
     def show_fullscreen(self):
-        """Affiche en plein écran."""
+        """Affiche en plein écran + lance le timer de re-raise pour tenir le
+        premier plan face a Kapsule Bar kiosk."""
         screen = QApplication.primaryScreen().geometry()
         self.setGeometry(screen)
         self.showFullScreen()
-        self.raise_()
-        self.activateWindow()
+        self._tick_raise()  # premier raise synchrone
+        self._raise_timer.start()
+
+    def hideEvent(self, event):
+        try:
+            self._raise_timer.stop()
+        except Exception:
+            pass
+        super().hideEvent(event)
 
 
 # Instance globale
