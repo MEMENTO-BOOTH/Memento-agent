@@ -87,6 +87,14 @@ def lire_imprimante():
                 except OSError:
                     break
 
+        # Tri DETERMINISTE : prefere le nom le plus court (donc "DP-DS620" avant
+        # "DP-DS620 (Copie 1)"), puis ordre alphabetique en secondaire. Sans ce
+        # tri, winreg.EnumKey retourne les clefs dans un ordre non stable et
+        # quand Windows a plusieurs entrees pour la meme imprimante physique
+        # (observe prod O divin Bethune 30/10), on choisissait tantot l'une
+        # tantot l'autre -> compteur et status aleatoires.
+        all_printers.sort(key=lambda x: (len(x[0]), x[0]))
+
         def _fallback_other_dnp():
             """Remonte l'imprimante DNP non-DS620 (DS-RX1 etc) en 'En veille'.
             On ne touche PAS a la DLL (bloque / crash) : on utilise un code

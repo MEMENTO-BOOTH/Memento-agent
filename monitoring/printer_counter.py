@@ -118,6 +118,17 @@ class _PrinterHandle:
                     except OSError:
                         break
 
+            # Tri DETERMINISTE : prefere le nom le plus court (donc "DP-DS620"
+            # avant "DP-DS620 (Copie 1)"), puis ordre alphabetique en secondaire.
+            # winreg.EnumKey ne garantit pas d'ordre stable -> sans ce tri, quand
+            # Windows a deux entrees pour la meme imprimante physique (copie
+            # fantome apres reinstall driver, observe O divin Bethune 30/10),
+            # cette boucle retenait tantot l'une tantot l'autre -> compteur
+            # instable, impression_verifiee_papier aleatoire. Meme pattern que
+            # le fix cote Kapsule Bar (src/main/printer/windows-driver.ts
+            # resolveLivePrinter).
+            candidats.sort(key=lambda x: (len(x[0]), x[0]))
+
             # PortInitialize + PortRelease serialises via DNP_PORT_LOCK pour
             # ne pas entrer en conflit avec le collector heartbeat. Sans ce
             # lock, quand printer_counter poll toutes les 3s et que le

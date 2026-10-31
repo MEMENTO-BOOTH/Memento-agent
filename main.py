@@ -425,8 +425,58 @@ def _setup_global_tray(app):
     _log(f"tray created (global), visible={tray.isVisible()}")
 
 
+def _run_smoke_test():
+    """Mode smoke-test (--smoke-test) : affiche brievement chaque fenetre qui
+    charge des assets externes (rupture_screen notamment via QtSvg) et sort en
+    code 0 si tout va bien, 1 sinon. But : attraper les ModuleNotFoundError
+    du binaire PyInstaller avant la release prod (incident O divin Bethune
+    30/10 : PyQt5.QtSvg manquant du build, boucle de crash 248x en 4h22)."""
+    from PyQt5.QtWidgets import QApplication
+    from PyQt5.QtCore import QTimer
+    import traceback
+    try:
+        app = QApplication(sys.argv)
+        app.setQuitOnLastWindowClosed(False)
+        checks = []
+
+        # Rupture screen : charge QtSvg + icone cadenas + police Satoshi.
+        from rupture_screen import RuptureScreen
+        r = RuptureScreen()
+        r.show_fullscreen()
+        checks.append(("rupture_screen", True))
+
+        # LockScreen : charge aussi des assets + QtSvg.
+        try:
+            from auth import LockScreen
+            lock = LockScreen()
+            lock.show()
+            checks.append(("lock_screen", True))
+        except Exception as e:
+            checks.append(("lock_screen", f"FAIL: {e}"))
+
+        # Timer pour quitter apres 1.5s (laisse le temps aux widgets de se
+        # construire et au QTimer de rupture_screen de ticker au moins une fois).
+        QTimer.singleShot(1500, app.quit)
+        app.exec_()
+
+        fails = [name for name, ok in checks if ok is not True]
+        if fails:
+            print(f"SMOKE TEST FAIL: {fails}", file=sys.stderr)
+            sys.exit(1)
+        print("SMOKE TEST OK: " + ", ".join(name for name, _ in checks))
+        sys.exit(0)
+    except Exception:
+        traceback.print_exc(file=sys.stderr)
+        print("SMOKE TEST FAIL: exception non-recuperable", file=sys.stderr)
+        sys.exit(1)
+
+
 def main():
     _log("main() enter")
+    # Mode smoke-test (declenche par scripts/smoke-test-release.ps1 avant tag)
+    if "--smoke-test" in sys.argv:
+        _run_smoke_test()
+        return
     _install_exception_hook()
     app = QApplication(sys.argv)
     app.setQuitOnLastWindowClosed(False)  # Ne pas quitter quand toutes les fenêtres sont fermées

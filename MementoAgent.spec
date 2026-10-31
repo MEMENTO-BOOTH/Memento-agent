@@ -28,6 +28,14 @@ a = Analysis(
         'monitoring.printer_counter',
         'monitoring.led_strip',
         'settings.sections.led',
+        # PyQt5 sous-modules — doivent etre explicites. PyInstaller inclut
+        # QtCore/QtGui/QtWidgets automatiquement mais rate QtSvg (observe prod
+        # O divin Bethune 30/10 : ModuleNotFoundError 'PyQt5.QtSvg' quand
+        # rupture_screen.py charge l'icone cadenas -> 248 crashs en boucle en
+        # 4h22 a cause du re-raise 1.5s de v1.0.28.17), QtNetwork (QLocalServer),
+        # QtPrintSupport (QPrintDialog eventuel).
+        'PyQt5.QtCore', 'PyQt5.QtGui', 'PyQt5.QtWidgets',
+        'PyQt5.QtSvg', 'PyQt5.QtNetwork', 'PyQt5.QtPrintSupport',
         'serial', 'serial.tools', 'serial.tools.list_ports',
         'google.auth', 'google.oauth2', 'google.oauth2.service_account',
         'googleapiclient', 'googleapiclient.discovery',
