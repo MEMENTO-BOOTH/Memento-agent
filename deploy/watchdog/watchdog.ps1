@@ -16,6 +16,13 @@
 #      _MEIxxxxx de %TEMP% plus vieux qu'1 h (209 Mo chacun, orphelins si
 #      bootloader PyInstaller tue avant son cleanup).
 #
+# v1.0.28.21 : Stop-Agent attend reellement la mort du process (10 x 500 ms)
+#              avant de laisser Start-Agent tourner. Sinon Stop-Process -Force
+#              n'etant pas synchrone, on pouvait lancer un doublon pendant
+#              que l'ancien process etait encore actif (bug Le confess
+#              06/11/2026 : 2 MementoAgent.exe actifs, TPE serie + alertes.log
+#              + reseau partages -> plus aucun heartbeat + PIN admin casse).
+#
 # Lance par start-watchdog.vbs (fenetre cachee) via tache planifiee Windows.
 # Logs rotatifs dans %LOCALAPPDATA%\MementoAgent\watchdog.log (max 1 Mo).
 
@@ -109,14 +116,38 @@ function Start-Agent {
 
 
 function Stop-Agent {
+    # Retourne $true si l'agent est reellement mort (0 process restant),
+    # $false s'il refuse de mourir apres toutes les tentatives.
+    # Le caller NE DOIT PAS appeler Start-Agent si retour $false (sinon
+    # on lance un doublon qui se marche dessus sur TPE serie, alertes.log,
+    # reseau — bug observe sur Le confess 06/11/2026 : 2 MementoAgent.exe
+    # actifs, l'un bloque depuis 441s CPU, l'autre fraichement relance).
     try {
         $procs = Get-Process -Name $processName -ErrorAction SilentlyContinue
-        if ($procs) {
-            Stop-Process -Name $processName -Force -ErrorAction SilentlyContinue
-            Write-WatchdogLog "Agent kille (etait fige ou bloque)"
-            Start-Sleep -Seconds 2
+        if (-not $procs) { return $true }
+        Stop-Process -Name $processName -Force -ErrorAction SilentlyContinue
+        Write-WatchdogLog "Agent kille (etait fige ou bloque)"
+        # Attente active : jusqu'a 10 x 500 ms = 5 s max. Stop-Process -Force
+        # n'est PAS synchrone : il envoie SIGTERM-equivalent et rend la main,
+        # le process peut mettre plusieurs secondes a reellement s'arreter
+        # (voire jamais, si bloque dans un appel DLL/kernel noninterruptible).
+        for ($i = 1; $i -le 10; $i++) {
+            Start-Sleep -Milliseconds 500
+            $still = Get-Process -Name $processName -ErrorAction SilentlyContinue
+            if (-not $still) {
+                if ($i -gt 1) {
+                    Write-WatchdogLog "Agent mort apres $($i * 500) ms"
+                }
+                return $true
+            }
         }
-    } catch {}
+        $pids = (Get-Process -Name $processName -ErrorAction SilentlyContinue | ForEach-Object { $_.Id }) -join ","
+        Write-WatchdogLog "ALERTE: process survit au kill apres 5s (PIDs: $pids) — Start-Agent SKIPPED, intervention manuelle possiblement necessaire"
+        return $false
+    } catch {
+        Write-WatchdogLog "Stop-Agent exception: $_"
+        return $false
+    }
 }
 
 
@@ -156,7 +187,7 @@ function Test-CircuitBreakerOpen {
 }
 
 
-Write-WatchdogLog "=== Watchdog v1.0.28.14 demarre (check ${checkIntervalSec}s, grace ${graceDelaySec}s, max ${maxRestartsPerHour} restarts/h) ==="
+Write-WatchdogLog "=== Watchdog v1.0.28.21 demarre (check ${checkIntervalSec}s, grace ${graceDelaySec}s, max ${maxRestartsPerHour} restarts/h) ==="
 Invoke-MeiCleanup
 $lastMeiCleanupTs = Get-Date
 
@@ -179,8 +210,13 @@ while ($true) {
                 $script:restartTimestamps = @()
                 continue
             }
-            Stop-Agent
-            Start-Agent
+            if (Stop-Agent) {
+                Start-Agent
+            }
+            # Si Stop-Agent retourne $false (process survit), on NE lance PAS
+            # Start-Agent — le log d'alerte a deja ete emis. On retentera au
+            # prochain tick du watchdog ; si le process reste zombi, on finit
+            # par ouvrir le circuit breaker, ce qui est un signal correct.
         }
     } catch {
         Write-WatchdogLog "Boucle: exception $_"
