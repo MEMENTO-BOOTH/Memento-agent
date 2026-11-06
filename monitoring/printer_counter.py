@@ -107,8 +107,17 @@ class _PrinterHandle:
             candidats = []
             with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, reg_path) as key:
                 for i in range(100):
+                    # EnumKey leve OSError = fin de l'enumeration -> break
+                    # legitime. OSError plus loin (sur OpenKey/QueryValueEx
+                    # pour une imprimante au registre atypique style
+                    # "Microsoft Print to PDF") -> continue, sinon la DNP
+                    # enumeree APRES n'est jamais trouvee (meme bug que fix
+                    # Les Follies 06/11 cote collectors/printer.py).
                     try:
                         name = winreg.EnumKey(key, i)
+                    except OSError:
+                        break
+                    try:
                         if _is_ds620(name):
                             with winreg.OpenKey(
                                 winreg.HKEY_LOCAL_MACHINE, f"{reg_path}\\{name}"
@@ -116,7 +125,7 @@ class _PrinterHandle:
                                 port, _ = winreg.QueryValueEx(pk, "Port")
                                 candidats.append((name, port))
                     except OSError:
-                        break
+                        continue
 
             # Tri DETERMINISTE : prefere le nom le plus court (donc "DP-DS620"
             # avant "DP-DS620 (Copie 1)"), puis ordre alphabetique en secondaire.

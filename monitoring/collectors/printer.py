@@ -66,8 +66,20 @@ def lire_imprimante():
         other_dnp_name = None   # Autre modele DNP present, remonte en degraded sans DLL
         with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, reg) as key:
             for i in range(100):
+                # EnumKey leve OSError quand i depasse le nombre de clefs -> break
+                # legitime (fin de l'enumeration). Mais si un OSError arrive PLUS
+                # LOIN (sur OpenKey/QueryValueEx d'une imprimante particuliere a la
+                # structure registre atypique, ex: "Microsoft Print to PDF"), on
+                # DOIT juste skipper cette entree et continuer — pas abandonner
+                # tout le scan. Sinon la vraie DNP enumeree APRES l'imprimante
+                # fautive n'est jamais trouvee (observe Les Follies 06/11 :
+                # DP-DS620 presente et fonctionnelle, mais agent remontait en
+                # permanence "Imprimante non trouvee").
                 try:
                     name = winreg.EnumKey(key, i)
+                except OSError:
+                    break
+                try:
                     with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, f"{reg}\\{name}") as pk:
                         port, _ = winreg.QueryValueEx(pk, "Port")
                         try:
@@ -85,7 +97,7 @@ def lire_imprimante():
                     elif other_dnp_name is None:
                         other_dnp_name = name
                 except OSError:
-                    break
+                    continue
 
         # Tri DETERMINISTE : prefere le nom le plus court (donc "DP-DS620" avant
         # "DP-DS620 (Copie 1)"), puis ordre alphabetique en secondaire. Sans ce
