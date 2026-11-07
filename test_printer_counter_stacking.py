@@ -82,7 +82,7 @@ def install_fakes(watcher, pending, patches_log):
                 tx.update(data)
         return True
 
-    def fake_alerte(tx_id, paiement_at=None):
+    def fake_alerte(tx_id, carte_4_derniers=None, paiement_at=None):
         patches_log.append((tx_id, {"_alerte": "non_delivree"}))
 
     watcher._fetch_pending_transactions = fake_fetch

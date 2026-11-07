@@ -128,7 +128,7 @@ def _charger_cache_alertes(borne_id):
     if _alertes_cache_loaded:
         return
     try:
-        r = requests.get(
+        r = supa.http_get(
             f"{supa.SUPABASE_URL}/rest/v1/alertes"
             f"?borne_id=eq.{borne_id}&statut=eq.ouverte&select=type",
             headers=supa.HEADERS, timeout=10,
@@ -247,7 +247,7 @@ def _creer_alerte(borne_id, type_alerte, source, message, gravite="critique"):
             "statut": "ouverte",
             "timestamp": datetime.now().astimezone().isoformat(),
         }
-        r = requests.post(
+        r = supa.http_post(
             f"{supa.SUPABASE_URL}/rest/v1/alertes",
             headers=supa.HEADERS_MINIMAL,
             json=payload,
@@ -296,14 +296,14 @@ def _resoudre_alertes(borne_id, types):
 
             # 2. TOUJOURS chercher en base pour rattraper les alertes orphelines
             #    (cache desynchro, alerte creee par un agent precedent, etc.)
-            r = requests.get(
+            r = supa.http_get(
                 f"{supa.SUPABASE_URL}/rest/v1/alertes"
                 f"?borne_id=eq.{borne_id}&type=eq.{t}&statut=eq.ouverte&select=id",
                 headers=supa.HEADERS, timeout=10,
             )
             if r.status_code == 200 and r.json():
                 alerte_id = r.json()[0]["id"]
-                requests.patch(
+                supa.http_patch(
                     f"{supa.SUPABASE_URL}/rest/v1/alertes?id=eq.{alerte_id}",
                     headers=supa.HEADERS_MINIMAL,
                     json={

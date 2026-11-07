@@ -130,7 +130,7 @@ class CashInterfaceWatcher:
             return
         try:
             import requests
-            r = requests.get(
+            r = supa.http_get(
                 f"{supa.SUPABASE_URL}/rest/v1/transactions"
                 f"?borne_id=eq.{self._borne_id}"
                 f"&impression_declenchee=eq.false"
@@ -161,7 +161,7 @@ class CashInterfaceWatcher:
                         except Exception:
                             pass
 
-                requests.patch(
+                supa.http_patch(
                     f"{supa.SUPABASE_URL}/rest/v1/transactions?id=eq.{tx_id}",
                     headers=supa.HEADERS_MINIMAL,
                     json={"impression_declenchee": True},

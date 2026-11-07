@@ -66,6 +66,84 @@ HEADERS_UPSERT = {
 
 TIMEOUT = 10
 
+# --- Session HTTP globale avec auto-reset ---------------------------------
+# Pourquoi : quand la connexion reseau tombe pendant plusieurs heures (observe
+# Parc Ohlain / MB-50 entre 20h30-9h30), le pool de sockets interne de
+# `requests` garde des connexions mortes. Les requetes suivantes timeout
+# silencieusement, meme quand le reseau revient. L'agent continue de tourner
+# (logs locaux OK, ticks alive) mais tous ses POST/GET Supabase echouent, donc
+# plus aucun heartbeat ni alerte n'arrive en base — et le verify_pin refuse
+# le bon code parce que la requete /utilisateurs timeout. On centralise ici
+# une Session unique, et on la recree apres N echecs reseau consecutifs.
+import threading
+_session = requests.Session()
+_session_lock = threading.Lock()  # protege _session + _consec_failures
+_consec_failures = 0
+_RESET_THRESHOLD = 3
+
+
+def _reset_session_locked():
+    """Doit etre appele avec _session_lock deja detenu."""
+    global _session, _consec_failures
+    try:
+        _session.close()
+    except Exception:
+        pass
+    _session = requests.Session()
+    _consec_failures = 0
+    print(f"[SUPABASE] Pool HTTP reset ({_RESET_THRESHOLD} echecs consecutifs)")
+
+
+def _call(method, url, **kw):
+    """Wrapper autour de _session qui compte les echecs reseau et reset le
+    pool apres _RESET_THRESHOLD timeouts/connection errors consecutifs.
+    Les status HTTP (401/400/500) ne comptent PAS comme echec reseau — ce
+    n'est pas le pool qui est mort, c'est le serveur qui refuse.
+
+    Multi-thread : MonitoringEngine (QThread), code_pool/drive_backup
+    (daemons), UI principale, main._create_borne tapent tous Supabase en
+    parallele. Le lock protege contre un swap de session pendant qu'un
+    autre thread est en plein appel (sockets arraches)."""
+    global _consec_failures
+    with _session_lock:
+        sess = _session
+    try:
+        r = getattr(sess, method)(url, **kw)
+        with _session_lock:
+            _consec_failures = 0
+        return r
+    except requests.exceptions.RequestException as e:
+        # Couvre Timeout, ConnectionError, ChunkedEncodingError, SSLError,
+        # ContentDecodingError, RetryError — tout echec de transport. HTTP
+        # 4xx/5xx n'est PAS une exception requests, donc pas compte.
+        if not isinstance(e, (requests.Timeout, requests.ConnectionError,
+                              requests.exceptions.ChunkedEncodingError,
+                              requests.exceptions.ContentDecodingError,
+                              requests.exceptions.RetryError,
+                              requests.exceptions.SSLError)):
+            raise
+        with _session_lock:
+            _consec_failures += 1
+            if _consec_failures >= _RESET_THRESHOLD:
+                _reset_session_locked()
+        raise
+
+
+def http_get(url, **kw):
+    return _call("get", url, **kw)
+
+
+def http_post(url, **kw):
+    return _call("post", url, **kw)
+
+
+def http_patch(url, **kw):
+    return _call("patch", url, **kw)
+
+
+def http_delete(url, **kw):
+    return _call("delete", url, **kw)
+
 
 def _url(endpoint):
     return f"{SUPABASE_URL}/rest/v1/{endpoint}"
@@ -75,7 +153,7 @@ def get_borne():
     """Identifie la borne via le hostname. Retourne le dict complet ou None."""
     hostname = socket.gethostname()
     try:
-        r = requests.get(
+        r = _call("get",
             _url(f"bornes?code=eq.{hostname}&select=*"),
             headers=HEADERS, timeout=TIMEOUT,
         )
@@ -91,7 +169,7 @@ def get_or_create_borne():
     hostname = socket.gethostname()
     try:
         # Chercher d'abord
-        r = requests.get(
+        r = _call("get",
             _url(f"bornes?code=eq.{hostname}&select=*"),
             headers=HEADERS, timeout=TIMEOUT,
         )
@@ -107,7 +185,7 @@ def get_or_create_borne():
             "statut": "active",
             "setup_done": False,
         }
-        r = requests.post(
+        r = _call("post",
             _url("bornes"),
             headers=HEADERS, json=data, timeout=TIMEOUT,
         )
@@ -119,7 +197,7 @@ def get_or_create_borne():
                 for j in range(7)
             ]
             try:
-                requests.post(
+                _call("post",
                     _url("horaires"),
                     headers=HEADERS_MINIMAL, json=horaires_defaut, timeout=TIMEOUT,
                 )
@@ -134,7 +212,7 @@ def get_or_create_borne():
 def get_heartbeat(borne_id):
     """Récupère le heartbeat courant de la borne."""
     try:
-        r = requests.get(
+        r = _call("get",
             _url(f"heartbeats?borne_id=eq.{borne_id}&select=*"),
             headers=HEADERS, timeout=TIMEOUT,
         )
@@ -148,7 +226,7 @@ def get_heartbeat(borne_id):
 def get_horaires(borne_id):
     """Récupère les 7 jours d'horaires."""
     try:
-        r = requests.get(
+        r = _call("get",
             _url(f"horaires?borne_id=eq.{borne_id}&select=*&order=jour"),
             headers=HEADERS, timeout=TIMEOUT,
         )
@@ -171,18 +249,18 @@ def save_horaires(borne_id, rows):
             "Prefer": "resolution=merge-duplicates,return=minimal",
         }
         # Ajouter un identifiant unique par jour pour l'upsert
-        r_ins = requests.post(
+        r_ins = _call("post",
             _url("horaires"),
             headers=HEADERS_MINIMAL, json=rows, timeout=TIMEOUT,
         )
         if r_ins.status_code in (200, 201):
             # INSERT OK → supprimer les anciens (ceux qui ne sont pas dans les nouveaux IDs)
-            requests.delete(
+            _call("delete",
                 _url(f"horaires?borne_id=eq.{borne_id}"),
                 headers=HEADERS_MINIMAL, timeout=TIMEOUT,
             )
             # Réinsérer proprement
-            requests.post(
+            _call("post",
                 _url("horaires"),
                 headers=HEADERS_MINIMAL, json=rows, timeout=TIMEOUT,
             )
@@ -190,11 +268,11 @@ def save_horaires(borne_id, rows):
         else:
             print(f"[SUPABASE] insert horaires: {r_ins.status_code} {r_ins.text[:200]}")
             # Fallback : DELETE + INSERT classique
-            requests.delete(
+            _call("delete",
                 _url(f"horaires?borne_id=eq.{borne_id}"),
                 headers=HEADERS_MINIMAL, timeout=TIMEOUT,
             )
-            r2 = requests.post(
+            r2 = _call("post",
                 _url("horaires"),
                 headers=HEADERS_MINIMAL, json=rows, timeout=TIMEOUT,
             )
@@ -207,7 +285,7 @@ def save_horaires(borne_id, rows):
 def patch_borne(borne_id, data):
     """Met à jour un champ de la borne (ex: statut)."""
     try:
-        r = requests.patch(
+        r = _call("patch",
             _url(f"bornes?id=eq.{borne_id}"),
             headers=HEADERS_MINIMAL, json=data, timeout=TIMEOUT,
         )
@@ -219,7 +297,7 @@ def patch_borne(borne_id, data):
 def supabase_patch_heartbeat(borne_id, data):
     """Met à jour un champ du heartbeat (ex: mode_coupe)."""
     try:
-        r = requests.patch(
+        r = _call("patch",
             _url(f"heartbeats?borne_id=eq.{borne_id}"),
             headers=HEADERS_MINIMAL, json=data, timeout=TIMEOUT,
         )
@@ -231,7 +309,7 @@ def supabase_patch_heartbeat(borne_id, data):
 def get_alertes(borne_id, limit=50):
     """Récupère toutes les alertes récentes de la borne (pour la page alertes)."""
     try:
-        r = requests.get(
+        r = _call("get",
             _url(f"alertes?borne_id=eq.{borne_id}&select=*&order=timestamp.desc&limit={limit}"),
             headers=HEADERS, timeout=TIMEOUT,
         )
@@ -245,7 +323,7 @@ def get_alertes(borne_id, limit=50):
 def get_alertes_ouvertes(borne_id, limit=20):
     """Récupère uniquement les alertes OUVERTES (pour le dashboard)."""
     try:
-        r = requests.get(
+        r = _call("get",
             _url(f"alertes?borne_id=eq.{borne_id}&statut=eq.ouverte&select=*&order=timestamp.desc&limit={limit}"),
             headers=HEADERS, timeout=TIMEOUT,
         )
@@ -261,7 +339,7 @@ def get_transactions_today(borne_id):
     from datetime import date
     today = date.today().isoformat()
     try:
-        r = requests.get(
+        r = _call("get",
             _url(f"transactions?borne_id=eq.{borne_id}&paiement_at=gte.{today}&select=*&order=paiement_at.desc"),
             headers=HEADERS, timeout=TIMEOUT,
         )
@@ -278,7 +356,7 @@ def get_transactions_by_date(borne_id, target_date):
     d = target_date.isoformat()
     d_next = (target_date + timedelta(days=1)).isoformat()
     try:
-        r = requests.get(
+        r = _call("get",
             _url(f"transactions?borne_id=eq.{borne_id}&paiement_at=gte.{d}&paiement_at=lt.{d_next}&select=*&order=paiement_at.desc"),
             headers=HEADERS, timeout=TIMEOUT,
         )
@@ -295,7 +373,7 @@ def get_transactions_week(borne_id, ref_date):
     monday = ref_date - timedelta(days=ref_date.weekday())
     sunday = monday + timedelta(days=7)
     try:
-        r = requests.get(
+        r = _call("get",
             _url(f"transactions?borne_id=eq.{borne_id}&paiement_at=gte.{monday.isoformat()}&paiement_at=lt.{sunday.isoformat()}&select=*&order=paiement_at.desc"),
             headers=HEADERS, timeout=TIMEOUT,
         )
@@ -329,7 +407,7 @@ def _get_borne_environnement(borne_id):
     if not borne_id:
         return "prod"
     try:
-        r = requests.get(
+        r = _call("get",
             _url(f"bornes?id=eq.{borne_id}&select=environnement"),
             headers=HEADERS, timeout=TIMEOUT,
         )
@@ -349,7 +427,7 @@ def _fetch_dashboard_release(channel):
     if AGENT_API_TOKEN:
         headers["Authorization"] = f"Bearer {AGENT_API_TOKEN}"
     try:
-        r = requests.get(
+        r = _call("get",
             f"{DASHBOARD_URL}/api/agent/release/{channel}",
             headers=headers,
             timeout=TIMEOUT,
@@ -370,7 +448,7 @@ def _fetch_github_release_fallback():
     if not GITHUB_TOKEN:
         return None
     try:
-        r = requests.get(
+        r = _call("get",
             f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest",
             headers={
                 "Authorization": f"token {GITHUB_TOKEN}",
@@ -424,7 +502,7 @@ def get_latest_release(borne_id=None):
 def get_utilisateurs():
     """Récupère les utilisateurs."""
     try:
-        r = requests.get(
+        r = _call("get",
             _url("utilisateurs?select=id,email,nom,telephone,role&actif=eq.true&order=nom"),
             headers=HEADERS, timeout=TIMEOUT,
         )
@@ -438,7 +516,7 @@ def get_utilisateurs():
 def get_alerte_destinataires(borne_id):
     """Récupère les destinataires d'alertes SMS pour cette borne (+ globaux)."""
     try:
-        r = requests.get(
+        r = _call("get",
             _url(f"alerte_destinataires?or=(borne_id.eq.{borne_id},borne_id.is.null)&actif=eq.true&select=*&order=created_at"),
             headers=HEADERS, timeout=TIMEOUT,
         )
@@ -453,14 +531,14 @@ def save_alerte_destinataires(borne_id, contacts):
     """Supprime puis réinsère les destinataires pour cette borne."""
     try:
         # Supprimer les existants pour cette borne
-        requests.delete(
+        _call("delete",
             _url(f"alerte_destinataires?borne_id=eq.{borne_id}"),
             headers=HEADERS_MINIMAL, timeout=TIMEOUT,
         )
         # Insérer les nouveaux
         for c in contacts:
             if c.get("telephone") or c.get("email"):
-                requests.post(
+                _call("post",
                     _url("alerte_destinataires"),
                     headers=HEADERS_MINIMAL,
                     json={
@@ -481,13 +559,13 @@ def record_paper_history(borne_id, feuilles_restantes):
     from datetime import date
     today = date.today().isoformat()
     try:
-        r = requests.get(
+        r = _call("get",
             _url(f"paper_history?borne_id=eq.{borne_id}&recorded_at=gte.{today}&select=id&limit=1"),
             headers=HEADERS, timeout=TIMEOUT,
         )
         if r.status_code == 200 and r.json():
             return True
-        r = requests.post(
+        r = _call("post",
             _url("paper_history"),
             headers=HEADERS_MINIMAL,
             json={"borne_id": borne_id, "feuilles_restantes": feuilles_restantes},
@@ -502,7 +580,7 @@ def record_paper_history(borne_id, feuilles_restantes):
 def get_printer_status_config():
     """Récupère la palette d'erreurs (table printer_status_config)."""
     try:
-        r = requests.get(
+        r = _call("get",
             _url("printer_status_config?select=*&order=status_code"),
             headers=HEADERS, timeout=TIMEOUT,
         )
@@ -516,7 +594,7 @@ def get_printer_status_config():
 def verifier_pin(pin):
     """Vérifie un PIN dans la table utilisateurs. Retourne le dict utilisateur ou None."""
     try:
-        r = requests.get(
+        r = _call("get",
             _url(f"utilisateurs?pin=eq.{pin}&select=id,nom,is_admin,voir_ca"),
             headers=HEADERS, timeout=TIMEOUT,
         )
@@ -532,7 +610,7 @@ def verifier_pin(pin):
 def upsert_user_connection(user_id, borne_id):
     """Enregistre qu'un utilisateur s'est connecté sur une borne."""
     try:
-        r = requests.post(
+        r = _call("post",
             _url("user_connections?on_conflict=user_id,borne_id"),
             headers=HEADERS_UPSERT,
             json={
@@ -551,7 +629,7 @@ def upsert_user_connection(user_id, borne_id):
 def save_printer_status_config(config_id, data):
     """Met à jour la gravité d'un code erreur."""
     try:
-        r = requests.patch(
+        r = _call("patch",
             _url(f"printer_status_config?id=eq.{config_id}"),
             headers=HEADERS_MINIMAL, json=data, timeout=TIMEOUT,
         )

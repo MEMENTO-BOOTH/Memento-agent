@@ -239,7 +239,7 @@ class SettingsWidget(QWidget):
         """Récupère l'URL du logo depuis la table partenaires."""
         import requests
         try:
-            r = requests.get(
+            r = supa.http_get(
                 f"{supa.SUPABASE_URL}/rest/v1/partenaires?id=eq.{partenaire_id}&select=logo_url",
                 headers=supa.HEADERS, timeout=10,
             )
@@ -531,7 +531,7 @@ class SettingsWidget(QWidget):
             filename = f"logo_{borne_id}.{ext}"
 
             # Upload dans le bucket "logos"
-            r = requests.post(
+            r = supa.http_post(
                 f"{supa.SUPABASE_URL}/storage/v1/object/logos/{filename}",
                 headers={
                     "apikey": supa.SUPABASE_KEY,
@@ -551,14 +551,14 @@ class SettingsWidget(QWidget):
                     # Sauvegarder sur le partenaire si il existe
                     pid = borne.get("partenaire_id")
                     if pid:
-                        requests.patch(
+                        supa.http_patch(
                             f"{supa.SUPABASE_URL}/rest/v1/partenaires?id=eq.{pid}",
                             headers=supa.HEADERS_MINIMAL,
                             json={"logo_url": logo_url},
                             timeout=10,
                         )
                     # Aussi sauvegarder directement sur la borne (fallback)
-                    requests.patch(
+                    supa.http_patch(
                         f"{supa.SUPABASE_URL}/rest/v1/bornes?id=eq.{borne['id']}",
                         headers=supa.HEADERS_MINIMAL,
                         json={"logo_url": logo_url},

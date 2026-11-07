@@ -113,7 +113,7 @@ def resolve_alerte(alerte_id):
     try:
         from datetime import datetime
         import requests
-        r = requests.patch(
+        r = supa.http_patch(
             f"{supa.SUPABASE_URL}/rest/v1/alertes?id=eq.{alerte_id}",
             headers=supa.HEADERS_MINIMAL,
             json={
@@ -133,7 +133,7 @@ def assign_alerte(alerte_id, assignee):
     try:
         from datetime import datetime
         import requests
-        r = requests.patch(
+        r = supa.http_patch(
             f"{supa.SUPABASE_URL}/rest/v1/alertes?id=eq.{alerte_id}",
             headers=supa.HEADERS_MINIMAL,
             json={
@@ -152,7 +152,7 @@ def delete_alerte(alerte_id):
     """Supprime une alerte."""
     try:
         import requests
-        r = requests.delete(
+        r = supa.http_delete(
             f"{supa.SUPABASE_URL}/rest/v1/alertes?id=eq.{alerte_id}",
             headers=supa.HEADERS_MINIMAL,
             timeout=10,

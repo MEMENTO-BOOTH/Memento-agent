@@ -94,7 +94,7 @@ class MonitoringEngine(QThread):
                 return
             try:
                 import requests
-                requests.get(supa.SUPABASE_URL, timeout=5)
+                supa.http_get(supa.SUPABASE_URL, timeout=5)
                 break
             except Exception:
                 time.sleep(2)

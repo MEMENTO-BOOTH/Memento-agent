@@ -323,7 +323,7 @@ class PrinterCounterWatcher:
     def _post_event(self, payload):
         """POST silencieux sur printer_events. Retourne True si succes."""
         try:
-            r = requests.post(
+            r = supa.http_post(
                 f"{supa.SUPABASE_URL}/rest/v1/printer_events",
                 headers=supa.HEADERS_MINIMAL,
                 json=payload,
@@ -363,7 +363,7 @@ class PrinterCounterWatcher:
             datetime.now().astimezone() - timedelta(seconds=TX_LOOKBACK_S)
         ).isoformat().replace("+", "%2B")
         try:
-            r = requests.get(
+            r = supa.http_get(
                 f"{supa.SUPABASE_URL}/rest/v1/transactions"
                 f"?borne_id=eq.{self._borne_id}"
                 f"&impression_verifiee_papier=eq.false"
@@ -382,7 +382,7 @@ class PrinterCounterWatcher:
 
     def _patch(self, tx_id, data):
         try:
-            requests.patch(
+            supa.http_patch(
                 f"{supa.SUPABASE_URL}/rest/v1/transactions?id=eq.{tx_id}",
                 headers=supa.HEADERS_MINIMAL,
                 json=data,
@@ -402,32 +402,79 @@ class PrinterCounterWatcher:
         else:
             heure = datetime.now().strftime("%H:%M")
         message = f"Un client{suffixe_carte} a paye sur {bar} a {heure} mais sa photo n'est pas sortie de l'imprimante."
+        payload = {
+            "borne_id": self._borne_id,
+            "type": "impression_non_delivree",
+            "source": "printer_counter",
+            "message": message,
+            "gravite": "critique",
+            "statut": "ouverte",
+            "timestamp": datetime.now().astimezone().isoformat(),
+        }
+        # POST via session HTTP globale (pool auto-reset si N timeouts, cf.
+        # fix Parc Ohlain v1.0.28.22). On check le status_code et on log la
+        # raison exacte si Supabase rejette (avant v1.0.28.22 : aucun check,
+        # le POST echouait en silence depuis des mois sur ce type d'alerte,
+        # 0 ligne 'impression_non_delivree' jamais inseree en base).
+        ok = False
         try:
-            import requests
-            payload = {
-                "borne_id": self._borne_id,
-                "type": "impression_non_delivree",
-                "source": "printer_counter",
-                "message": message,
-                "gravite": "critique",
-                "statut": "ouverte",
-                "timestamp": datetime.now().astimezone().isoformat(),
-            }
-            requests.post(
+            r = supa.http_post(
                 f"{supa.SUPABASE_URL}/rest/v1/alertes",
                 headers=supa.HEADERS_MINIMAL,
                 json=payload,
                 timeout=10,
             )
+            if r.status_code in (200, 201, 204):
+                ok = True
+            elif r.status_code == 400 and "PGRST204" in (r.text or ""):
+                # Meme garde-fou que heartbeat v1.0.28.18 : colonne manquante
+                # cote base. On retire la colonne fautive et on retry.
+                import re
+                m = re.search(r"Could not find the '([^']+)' column", r.text or "")
+                if m and m.group(1) in payload:
+                    missing = m.group(1)
+                    print(f"[PRINTER_COUNTER] colonne absente '{missing}' -> retry sans")
+                    payload.pop(missing, None)
+                    r2 = supa.http_post(
+                        f"{supa.SUPABASE_URL}/rest/v1/alertes",
+                        headers=supa.HEADERS_MINIMAL,
+                        json=payload,
+                        timeout=10,
+                    )
+                    ok = r2.status_code in (200, 201, 204)
+                    if not ok:
+                        print(f"[ALERTE INSERT ECHEC] retry status={r2.status_code} body={(r2.text or '')[:400]}")
+            if not ok and r.status_code not in (400,):
+                # Retry 1x sur 5xx / 502 / 503 (hiccup Kong / PostgREST)
+                if 500 <= r.status_code < 600:
+                    import time as _t; _t.sleep(1)
+                    r3 = supa.http_post(
+                        f"{supa.SUPABASE_URL}/rest/v1/alertes",
+                        headers=supa.HEADERS_MINIMAL,
+                        json=payload,
+                        timeout=10,
+                    )
+                    ok = r3.status_code in (200, 201, 204)
+                    if not ok:
+                        print(f"[ALERTE INSERT ECHEC] retry 5xx status={r3.status_code} body={(r3.text or '')[:400]}")
+            if not ok:
+                print(f"[ALERTE INSERT ECHEC] status={r.status_code} body={(r.text or '')[:400]} payload_type={payload.get('type')}")
+        except Exception as e:
+            print(f"[PRINTER_COUNTER] Exception POST alerte: {e}")
+
+        # UI locale et activity log TOUJOURS, meme si l'INSERT a rate —
+        # l'operateur voit au moins l'alerte sur l'ecran de la borne.
+        try:
             import activity_logger as alog
             alog.ui_alerte(
                 message,
                 "icon_impression_non_delivree.svg",
                 resolved=False,
             )
-            print(f"[PRINTER_COUNTER] Alerte creee pour tx {tx_id[:8]}")
-        except Exception as e:
-            print(f"[PRINTER_COUNTER] Erreur creation alerte: {e}")
+        except Exception:
+            pass
+        status_label = "cree" if ok else "ECHEC (voir log)"
+        print(f"[PRINTER_COUNTER] Alerte {status_label} pour tx {tx_id[:8]}")
 
     # --- Tick principal ----------------------------------------------
     def tick(self):

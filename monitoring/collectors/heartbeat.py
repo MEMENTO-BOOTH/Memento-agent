@@ -102,7 +102,7 @@ def envoyer_heartbeat(borne_id, donnees):
     import re
     for attempt in range(3):
         try:
-            r = requests.post(
+            r = supa.http_post(
                 f"{supa.SUPABASE_URL}/rest/v1/heartbeats?on_conflict=borne_id",
                 headers=supa.HEADERS_UPSERT,
                 json=data,

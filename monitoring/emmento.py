@@ -124,7 +124,7 @@ def _expirer_anciens_codes():
     try:
         from datetime import timedelta
         cutoff = (datetime.now().astimezone() - timedelta(days=60)).isoformat()
-        requests.patch(
+        supa.http_patch(
             f"{supa.SUPABASE_URL}/rest/v1/ememento"
             f"?timestamp=lt.{cutoff}&statut=eq.en_attente",
             headers=supa.HEADERS_MINIMAL,
@@ -307,7 +307,7 @@ def _envoyer_supabase_legacy(session_id, bar, timestamp, photos, code, originals
 
     for tentative in range(3):
         try:
-            r = requests.post(
+            r = supa.http_post(
                 f"{supa.SUPABASE_URL}/rest/v1/ememento?on_conflict=session_id",
                 headers=HEADERS_UPSERT,
                 json=data,
@@ -438,7 +438,7 @@ class EmentoWatcher:
                     }
                     if p.get("borne_id"):
                         data["borne_id"] = p["borne_id"]
-                    r = requests.post(
+                    r = supa.http_post(
                         f"{supa.SUPABASE_URL}/rest/v1/ememento?on_conflict=session_id",
                         headers=HEADERS_UPSERT, json=data, timeout=5,
                     )
@@ -455,7 +455,7 @@ class EmentoWatcher:
                     }
                     if p.get("borne_id"):
                         data["borne_id"] = p["borne_id"]
-                    r = requests.post(
+                    r = supa.http_post(
                         f"{supa.SUPABASE_URL}/rest/v1/ememento?on_conflict=session_id",
                         headers=HEADERS_UPSERT, json=data, timeout=5,
                     )
@@ -686,7 +686,7 @@ class EmentoWatcher:
             return
         try:
             # Trouver la plus ancienne transaction sans impression confirmee
-            r = requests.get(
+            r = supa.http_get(
                 f"{supa.SUPABASE_URL}/rest/v1/transactions"
                 f"?borne_id=eq.{self._borne_id}"
                 f"&impression_declenchee=eq.false"
@@ -705,7 +705,7 @@ class EmentoWatcher:
                     if ecart > 300:  # > 5 min = trop vieux
                         return
 
-                requests.patch(
+                supa.http_patch(
                     f"{supa.SUPABASE_URL}/rest/v1/transactions?id=eq.{tx_id}",
                     headers=supa.HEADERS_MINIMAL,
                     json={"impression_declenchee": True},
