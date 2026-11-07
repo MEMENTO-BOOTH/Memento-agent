@@ -183,13 +183,13 @@ def _alerte_deja_ouverte(borne_id, type_alerte):
 
 # Types visuellement "warning" : affichés en orange, PAS de page rupture
 # Mais envoyés comme "critique" à Supabase pour déclencher le SMS
-_TYPES_WARNING_VISUEL = {"surchauffe", "papier_bas", "disque_bas", "coupe_incoherente", "crash_relance", "borne_hors_ligne", "impression_non_delivree", "drive_deconnecte", "drive_sync_cassee", "borne_eteinte_3_jours", "kapsule_crash", "kapsule_ferme", "kapsule_exe_absent", "kapsule_health_illisible"}
+_TYPES_WARNING_VISUEL = {"surchauffe", "papier_bas", "disque_bas", "coupe_incoherente", "crash_relance", "borne_hors_ligne", "impression_non_delivree", "drive_deconnecte", "drive_sync_cassee", "borne_eteinte_3_jours", "kapsule_crash", "kapsule_ferme", "kapsule_exe_absent", "kapsule_health_illisible", "kapsule_fige", "kapsule_mauvaise_borne"}
 
 # Types envoyés à Supabase en gravité "warning" au lieu de "critique" :
 # affichés sur le dashboard mais NE DECLENCHENT PAS le SMS. Les alertes
 # Drive sont majoritairement de faux positifs / hiccups transitoires qui
 # se resolvent d'eux-memes -> pas de valeur ajoutee d'alerter par SMS.
-_TYPES_NO_SMS = {"drive_deconnecte", "drive_sync_cassee"}
+_TYPES_NO_SMS = {"drive_deconnecte", "drive_sync_cassee", "kapsule_fige", "kapsule_mauvaise_borne"}
 
 
 def _creer_alerte(borne_id, type_alerte, source, message, gravite="critique"):
@@ -197,9 +197,13 @@ def _creer_alerte(borne_id, type_alerte, source, message, gravite="critique"):
         # Gravité visuelle (orange ou rouge sur l'UI)
         gravite_visuelle = "warning" if type_alerte in _TYPES_WARNING_VISUEL else "critique"
 
+        # Gravite reellement envoyee a Supabase (ce qui declenche ou non le SMS
+        # via le trigger pg_net). On la calcule ici pour que le log soit honnete.
+        gravite_supabase_log = "warning" if type_alerte in _TYPES_NO_SMS else "critique"
+
         # 1. D'ABORD mettre à jour l'app (cache + UI + écran rupture)
         _alertes_ouvertes.add(type_alerte)
-        print(f"  [ALERTE] {type_alerte} créée — visuel={gravite_visuelle}, supabase=critique")
+        print(f"  [ALERTE] {type_alerte} créée — visuel={gravite_visuelle}, supabase={gravite_supabase_log}")
 
         import activity_logger as alog
         icon_map = {
@@ -225,6 +229,8 @@ def _creer_alerte(borne_id, type_alerte, source, message, gravite="critique"):
             "kapsule_ferme": "alert_crash_dslrbooth.svg",
             "kapsule_exe_absent": "alert_erreur_mecanique.svg",
             "kapsule_health_illisible": "alert_erreur_mecanique.svg",
+            "kapsule_fige": "alert_crash_dslrbooth.svg",
+            "kapsule_mauvaise_borne": "alert_erreur_donnees.svg",
         }
         alog.log_alerte_creee(type_alerte, gravite_visuelle, source, message, borne_id)
         alog.ui_alerte(f"{message}", icon_map.get(type_alerte, "icon_borne_hors_ligne.svg"), resolved=False)
@@ -317,6 +323,97 @@ def _resoudre_alertes(borne_id, types):
             print(f"  [RÉSOLU] ERREUR {t}: {e}")
 
 
+KAPSULE_FREEZE_SECONDS = 120  # > 2 min sans heartbeat Kapsule -> alerte kapsule_fige
+
+
+def verifier_kapsule_heartbeat(borne_id, nom_lieu):
+    """Verifie que Kapsule Bar poste bien ses heartbeats (champs kapsule_*
+    sur heartbeats). Independent de is_kapsule_borne() local, qui ne regarde
+    qu'un fichier health.json potentiellement perime. Totalement isole : ne
+    doit JAMAIS lever d'exception vers l'appelant (sinon la boucle de monitoring
+    se casse pour toutes les autres alertes). Chaque comparaison sur
+    kapsule_timestamp / kapsule_hostname check None avant tout calcul.
+
+    Cas :
+    a) kapsule_timestamp NULL           -> borne sans Kapsule : silencieux, aucune alerte
+    b) kapsule_timestamp > 2 min        -> Kapsule fige/arrete : alerte kapsule_fige
+    c) kapsule_timestamp recent MAIS
+       kapsule_hostname != OS hostname  -> config clonee : alerte kapsule_mauvaise_borne
+    """
+    try:
+        r = supa.http_get(
+            f"{supa.SUPABASE_URL}/rest/v1/heartbeats"
+            f"?borne_id=eq.{borne_id}"
+            f"&select=kapsule_timestamp,kapsule_hostname"
+            f"&limit=1",
+            headers=supa.HEADERS, timeout=10,
+        )
+        if r.status_code != 200:
+            print(f"  [KAPSULE_CHECK] GET heartbeats status={r.status_code}, skip")
+            return
+        rows = r.json()
+        if not rows:
+            return  # aucune ligne heartbeat pour cette borne : silencieux
+        row = rows[0]
+        kts_raw = row.get("kapsule_timestamp")
+        khost = row.get("kapsule_hostname")
+
+        # Cas (a) : jamais de heartbeat Kapsule -> borne dslrBooth pure
+        if kts_raw is None:
+            _resoudre_alertes(borne_id, ["kapsule_fige", "kapsule_mauvaise_borne"])
+            return
+
+        # Parse le timestamp defensivement
+        kts = None
+        try:
+            iso = kts_raw.replace("Z", "+00:00") if isinstance(kts_raw, str) else None
+            if iso:
+                kts = datetime.fromisoformat(iso)
+        except Exception:
+            kts = None
+        if kts is None:
+            print(f"  [KAPSULE_CHECK] kapsule_timestamp illisible: {kts_raw!r}, skip")
+            return
+
+        from datetime import timezone as _tz
+        now_utc = datetime.now(_tz.utc)
+        kts_utc = kts if kts.tzinfo else kts.replace(tzinfo=_tz.utc)
+        age_s = (now_utc - kts_utc).total_seconds()
+
+        bar = nom_lieu or "la borne"
+        # Cas (b) : Kapsule fige
+        if age_s > KAPSULE_FREEZE_SECONDS:
+            if not _alerte_deja_ouverte(borne_id, "kapsule_fige"):
+                _creer_alerte(
+                    borne_id, "kapsule_fige", "kapsule_watcher",
+                    f"Kapsule Bar fige sur {bar} (dernier heartbeat Kapsule il y a "
+                    f"{int(age_s // 60)} min).",
+                    "warning",
+                )
+            return
+
+        # Resolution si kapsule_fige etait ouverte et heartbeat redevient recent
+        _resoudre_alertes(borne_id, ["kapsule_fige"])
+
+        # Cas (c) : hostname mismatch (seulement si on a un vrai hostname a comparer)
+        if khost:
+            import socket
+            os_host = socket.gethostname()
+            if os_host and khost != os_host:
+                if not _alerte_deja_ouverte(borne_id, "kapsule_mauvaise_borne"):
+                    _creer_alerte(
+                        borne_id, "kapsule_mauvaise_borne", "kapsule_watcher",
+                        f"Config Kapsule clonee sur {bar} : heartbeat Kapsule "
+                        f"depuis '{khost}' alors que cette machine est '{os_host}'.",
+                        "warning",
+                    )
+                return
+        _resoudre_alertes(borne_id, ["kapsule_mauvaise_borne"])
+    except Exception as e:
+        # NE JAMAIS casser la boucle de monitoring pour les autres alertes.
+        print(f"  [KAPSULE_CHECK] exception isolee: {e}")
+
+
 def verifier_alertes(borne_id, nom_lieu, donnees):
     """Vérifie toutes les données collectées et crée/résout les alertes.
 
@@ -324,6 +421,10 @@ def verifier_alertes(borne_id, nom_lieu, donnees):
         imprimante_statut_code, feuilles_restantes, appareil_connecte,
         dslrbooth_running, disque_libre_go, ssid_wifi
     """
+    # Check Kapsule heartbeat independamment (isole dans sa propre fonction
+    # try/except). Appel ici pour qu'il tourne a la meme frequence que les
+    # autres checks (chaque tick heartbeat, env 60-90s).
+    verifier_kapsule_heartbeat(borne_id, nom_lieu)
     from monitoring.photo_app import is_kapsule_borne
     kapsule = is_kapsule_borne()
 
