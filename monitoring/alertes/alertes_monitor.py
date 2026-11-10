@@ -323,28 +323,58 @@ def _resoudre_alertes(borne_id, types):
             print(f"  [RÉSOLU] ERREUR {t}: {e}")
 
 
-KAPSULE_FREEZE_SECONDS = 120  # > 2 min sans heartbeat Kapsule -> alerte kapsule_fige
+KAPSULE_FREEZE_SECONDS = 300          # v1.0.28.24 : 5 min (etait 2 min) — laisse le temps au boot Kapsule
+AGENT_LIVE_SECONDS = 180              # seuil "agent lui-meme vivant" (heartbeat agent tourne toutes les 60-90s)
+
+
+def _parse_ts_safe(raw):
+    """Parse un timestamp ISO en datetime UTC tz-aware. Retourne None si illisible."""
+    try:
+        iso = raw.replace("Z", "+00:00") if isinstance(raw, str) else None
+        if not iso:
+            return None
+        from datetime import timezone as _tz
+        dt = datetime.fromisoformat(iso)
+        return dt if dt.tzinfo else dt.replace(tzinfo=_tz.utc)
+    except Exception:
+        return None
 
 
 def verifier_kapsule_heartbeat(borne_id, nom_lieu):
     """Verifie que Kapsule Bar poste bien ses heartbeats (champs kapsule_*
-    sur heartbeats). Independent de is_kapsule_borne() local, qui ne regarde
-    qu'un fichier health.json potentiellement perime. Totalement isole : ne
-    doit JAMAIS lever d'exception vers l'appelant (sinon la boucle de monitoring
-    se casse pour toutes les autres alertes). Chaque comparaison sur
-    kapsule_timestamp / kapsule_hostname check None avant tout calcul.
+    sur heartbeats). Totalement isole : ne doit JAMAIS lever d'exception
+    vers l'appelant.
 
     Cas :
     a) kapsule_timestamp NULL           -> borne sans Kapsule : silencieux, aucune alerte
-    b) kapsule_timestamp > 2 min        -> Kapsule fige/arrete : alerte kapsule_fige
+    b) kapsule_timestamp > KAPSULE_FREEZE_SECONDS
+       ET agent lui-meme vivant         -> Kapsule fige/arrete : alerte kapsule_fige
     c) kapsule_timestamp recent MAIS
        kapsule_hostname != OS hostname  -> config clonee : alerte kapsule_mauvaise_borne
+
+    v1.0.28.24 — 3 garde-fous contre les fausses alertes qui ont spam SMS
+    du 07 au 10/11 (vu sur presque toutes les bornes Kapsule : Bibs, Comptoir,
+    Speakeasy, R by royale, Berliner, Barriellt, casa royale, Imaginaire,
+    Parc Ohlain) :
+      1. Hors horaires d'ouverture -> skip (la borne est eteinte la nuit,
+         normal que Kapsule ne poste pas). Oubli de la v1.0.28.23.
+      2. Si l'agent LUI-MEME n'a pas pu poster depuis > AGENT_LIVE_SECONDS,
+         c'est un probleme reseau (wifi coupe, serveur Supabase down).
+         Le kapsule_timestamp est forcement vieux dans ce cas aussi, mais
+         Kapsule n'y est pour rien -> skip.
+      3. Seuil remonte de 120 s a 300 s (confirme par l'autre Claude cote
+         kapsule-bar : le boot Kapsule + Windows peut legitiment depasser
+         2 min avant le premier heartbeat, pas un bug).
     """
     try:
+        # Garde-fou 1 : hors horaires -> skip (rien n'est cense poster)
+        if not _est_dans_horaires(borne_id):
+            return
+
         r = supa.http_get(
             f"{supa.SUPABASE_URL}/rest/v1/heartbeats"
             f"?borne_id=eq.{borne_id}"
-            f"&select=kapsule_timestamp,kapsule_hostname"
+            f"&select=timestamp,kapsule_timestamp,kapsule_hostname"
             f"&limit=1",
             headers=supa.HEADERS, timeout=10,
         )
@@ -356,6 +386,7 @@ def verifier_kapsule_heartbeat(borne_id, nom_lieu):
             return  # aucune ligne heartbeat pour cette borne : silencieux
         row = rows[0]
         kts_raw = row.get("kapsule_timestamp")
+        agent_ts_raw = row.get("timestamp")
         khost = row.get("kapsule_hostname")
 
         # Cas (a) : jamais de heartbeat Kapsule -> borne dslrBooth pure
@@ -363,31 +394,31 @@ def verifier_kapsule_heartbeat(borne_id, nom_lieu):
             _resoudre_alertes(borne_id, ["kapsule_fige", "kapsule_mauvaise_borne"])
             return
 
-        # Parse le timestamp defensivement
-        kts = None
-        try:
-            iso = kts_raw.replace("Z", "+00:00") if isinstance(kts_raw, str) else None
-            if iso:
-                kts = datetime.fromisoformat(iso)
-        except Exception:
-            kts = None
+        kts = _parse_ts_safe(kts_raw)
+        agent_ts = _parse_ts_safe(agent_ts_raw)
         if kts is None:
             print(f"  [KAPSULE_CHECK] kapsule_timestamp illisible: {kts_raw!r}, skip")
             return
 
         from datetime import timezone as _tz
         now_utc = datetime.now(_tz.utc)
-        kts_utc = kts if kts.tzinfo else kts.replace(tzinfo=_tz.utc)
-        age_s = (now_utc - kts_utc).total_seconds()
+        age_kapsule_s = (now_utc - kts).total_seconds()
+        age_agent_s = (now_utc - agent_ts).total_seconds() if agent_ts else None
 
         bar = nom_lieu or "la borne"
         # Cas (b) : Kapsule fige
-        if age_s > KAPSULE_FREEZE_SECONDS:
+        if age_kapsule_s > KAPSULE_FREEZE_SECONDS:
+            # Garde-fou 2 : si l'agent LUI-MEME n'arrive pas a poster recemment
+            # (wifi coupe, Supabase down), on ne peut pas juger Kapsule. Skip.
+            if age_agent_s is None or age_agent_s > AGENT_LIVE_SECONDS:
+                print(f"  [KAPSULE_CHECK] skip : agent lui-meme vieux "
+                      f"(age_agent={age_agent_s}s), probleme reseau pas Kapsule")
+                return
             if not _alerte_deja_ouverte(borne_id, "kapsule_fige"):
                 _creer_alerte(
                     borne_id, "kapsule_fige", "kapsule_watcher",
                     f"Kapsule Bar fige sur {bar} (dernier heartbeat Kapsule il y a "
-                    f"{int(age_s // 60)} min).",
+                    f"{int(age_kapsule_s // 60)} min).",
                     "warning",
                 )
             return
