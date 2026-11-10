@@ -238,6 +238,16 @@ class PrinterCounterWatcher:
         # injoignable...). Reessaye au tick suivant. Cap a 100 pour eviter
         # une fuite memoire en cas d'incident reseau prolonge.
         self._failed_events = []
+        # v1.0.28.26 : instrumentation activity_logger (ecrit dans alertes.log,
+        # contrairement aux print() stdout qui sont perdus en mode Hidden).
+        # Pour diagnostiquer le bug 25/09 : phase 1 ne snapshot plus
+        # feuilles_avant sur les 5 bornes dslrBooth (Le confess, O divin,
+        # American bar, Box bar, La Planque).
+        self._tick_count = 0
+        self._boot_logged = False
+        # Log summary toutes les 20 ticks = 60 s (l'agent tick toutes les 3 s).
+        # Evite de spammer alertes.log tout en donnant un pouls du watcher.
+        self._tick_log_interval = 20
 
     def set_on_print_started(self, cb):
         self._on_print_started = cb
@@ -376,21 +386,62 @@ class PrinterCounterWatcher:
             )
             if r.status_code == 200:
                 return r.json() or []
+            # v1.0.28.26 : logger explicitement les status != 200 dans
+            # alertes.log pour tracer le bug 25/09. Avant seuls les prints
+            # stdout (perdus en mode Hidden) etaient emis -> on ne savait
+            # pas si le fetch echouait silencieusement.
+            try:
+                import activity_logger as alog
+                body = (r.text or "")[:200].replace("\n", " ")
+                alog.log_generic(
+                    "PRINTER_COUNTER",
+                    f"fetch tx FAIL status={r.status_code} body={body}",
+                )
+            except Exception:
+                pass
         except Exception as e:
             print(f"[PRINTER_COUNTER] Erreur fetch tx: {e}")
+            try:
+                import activity_logger as alog
+                alog.log_generic("PRINTER_COUNTER", f"fetch tx EXCEPTION {type(e).__name__}: {e}")
+            except Exception:
+                pass
         return []
 
     def _patch(self, tx_id, data):
         try:
-            supa.http_patch(
+            r = supa.http_patch(
                 f"{supa.SUPABASE_URL}/rest/v1/transactions?id=eq.{tx_id}",
                 headers=supa.HEADERS_MINIMAL,
                 json=data,
                 timeout=5,
             )
-            return True
+            # v1.0.28.26 : check status_code (avant on retournait True meme
+            # sur 4xx/5xx silencieux). Log l'echec dans alertes.log.
+            if r.status_code in (200, 201, 204):
+                return True
+            try:
+                import activity_logger as alog
+                body = (r.text or "")[:200].replace("\n", " ")
+                keys = ",".join(data.keys())
+                alog.log_generic(
+                    "PRINTER_COUNTER",
+                    f"PATCH FAIL tx={tx_id[:8]} status={r.status_code} "
+                    f"fields={keys} body={body}",
+                )
+            except Exception:
+                pass
+            return False
         except Exception as e:
             print(f"[PRINTER_COUNTER] Erreur PATCH {tx_id[:8]}: {e}")
+            try:
+                import activity_logger as alog
+                alog.log_generic(
+                    "PRINTER_COUNTER",
+                    f"PATCH EXCEPTION tx={tx_id[:8]} {type(e).__name__}: {e}",
+                )
+            except Exception:
+                pass
             return False
 
     def _creer_alerte_non_delivree(self, tx_id, carte_4_derniers=None, paiement_at=None):
@@ -503,9 +554,41 @@ class PrinterCounterWatcher:
                     -> ecart gonfle de 2h -> deadline 180s tirait toujours.
                     Tout est desormais tz-aware en UTC.
         """
+        # v1.0.28.26 : log du boot une seule fois pour savoir que le watcher
+        # tourne bien sur cette borne (sinon on ne sait rien car les print()
+        # stdout sont perdus en mode Start-Process Hidden).
+        if not self._boot_logged:
+            try:
+                import activity_logger as alog
+                alog.log_generic(
+                    "PRINTER_COUNTER",
+                    f"watcher demarre borne_id={self._borne_id[:8]} nom={self._nom_lieu}",
+                )
+            except Exception:
+                pass
+            self._boot_logged = True
+
+        self._tick_count += 1
         counter_now = self._tick_counter()
 
         pending = self._fetch_pending_transactions()
+
+        # v1.0.28.26 : heartbeat watcher toutes les 20 ticks (= 60 s). Permet
+        # de verifier a distance que le watcher tick, quelle est la valeur du
+        # compteur, combien de tx sont visibles. Cle pour diagnostiquer le
+        # bug 25/09 ou phase 1 ne snapshot plus feuilles_avant.
+        if self._tick_count % self._tick_log_interval == 0:
+            try:
+                import activity_logger as alog
+                alog.log_generic(
+                    "PRINTER_COUNTER",
+                    f"tick #{self._tick_count} counter_now={counter_now} "
+                    f"pending={len(pending)} history={len(self._history)} "
+                    f"resolved_cache={len(self._resolved)}",
+                )
+            except Exception:
+                pass
+
         if not pending:
             return
 
@@ -537,10 +620,34 @@ class PrinterCounterWatcher:
             for tx, paiement_at in parsed:
                 if tx.get("feuilles_avant") is None:
                     ref = self._counter_at(paiement_at)
+                    source = "history" if ref is not None else "counter_now"
                     if ref is None:
                         ref = counter_now
-                    self._patch(tx["id"], {"feuilles_avant": ref})
+                    ok = self._patch(tx["id"], {"feuilles_avant": ref})
                     tx["feuilles_avant"] = ref
+                    # v1.0.28.26 : logger chaque snapshot pour tracer le bug 25/09
+                    try:
+                        import activity_logger as alog
+                        alog.log_generic(
+                            "PRINTER_COUNTER",
+                            f"phase1 snapshot tx={tx['id'][:8]} "
+                            f"feuilles_avant={ref} (source={source}) patch_ok={ok}",
+                        )
+                    except Exception:
+                        pass
+        elif parsed:
+            # v1.0.28.26 : phase 1 skip car counter_now=None (imprimante en
+            # veille). Logger pour quantifier combien de fois on rate le
+            # snapshot a cause du bug veille DS620.
+            try:
+                import activity_logger as alog
+                alog.log_generic(
+                    "PRINTER_COUNTER",
+                    f"phase1 SKIP counter_now=None pending={len(parsed)} "
+                    f"(imprimante en veille, feuilles_avant pas snapshote)",
+                )
+            except Exception:
+                pass
 
         # --- Phase 2 : combien de tx marquer (oldest first) ---
         to_mark = []
@@ -583,6 +690,15 @@ class PrinterCounterWatcher:
                 f"[PRINTER_COUNTER] Impression verifiee {tx['id'][:8]} "
                 f"({tx.get('feuilles_avant')}->{feuilles_apres})"
             )
+            # v1.0.28.26 : trace phase 3 dans alertes.log (pas juste stdout)
+            try:
+                alog.log_generic(
+                    "PRINTER_COUNTER",
+                    f"phase3 verif=true tx={tx['id'][:8]} "
+                    f"{tx.get('feuilles_avant')}->{feuilles_apres}",
+                )
+            except Exception:
+                pass
 
         # --- Phase 4 : deadline pour les non marquees ---
         for tx, paiement_at in parsed:
@@ -609,6 +725,17 @@ class PrinterCounterWatcher:
                     f"(feuilles_apres={last_known}, deadline depassee de "
                     f"{ecart-FENETRE_VERIFICATION_S:.0f}s)"
                 )
+                # v1.0.28.26 : trace phase 4 dans alertes.log
+                try:
+                    import activity_logger as alog
+                    alog.log_generic(
+                        "PRINTER_COUNTER",
+                        f"phase4 NON_DELIVREE tx={tx_id[:8]} "
+                        f"feuilles_apres={last_known} "
+                        f"deadline_depassee={ecart-FENETRE_VERIFICATION_S:.0f}s",
+                    )
+                except Exception:
+                    pass
 
     def close(self):
         self._printer.close()

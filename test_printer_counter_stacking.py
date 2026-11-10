@@ -66,6 +66,10 @@ def make_watcher(printer):
     w._failed_events = []
     # Mock le POST printer_events pour ne pas taper Supabase pendant les tests
     w._post_event = lambda payload: True
+    # v1.0.28.26 : nouveaux attributs d'instrumentation
+    w._tick_count = 0
+    w._boot_logged = True  # skip le log boot dans les tests
+    w._tick_log_interval = 20
     return w
 
 
