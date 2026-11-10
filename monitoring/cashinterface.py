@@ -125,15 +125,27 @@ class CashInterfaceWatcher:
         recente. Avec desc, quand 2 clients payaient coup sur coup, le 2eme
         se retrouvait marque imprimee avant que sa propre photo soit sortie,
         et le 1er restait coince en pending. Le bug "ne s'empile plus".
+
+        v1.0.28.25 : filter temporel paiement_at >= now - 10min ajoute.
+        Sans ca, une seule tx ratee (pas marquee declen=true a cause d'un
+        crash agent ou reboot au moment du keystroke) devient un BOUCHON
+        permanent : order=asc + limit=1 renvoie toujours cette vieille tx,
+        ecart > 5 min -> skip -> toutes les tx futures restent coincees.
+        Observe en prod : 1704 tx bouchons sur 16 bornes, remontant jusqu'au
+        27/04/2026 (MB-18). Le filter borne le fetch aux 10 dernieres min
+        donc une tx > 10 min est consideree comme definitivement perdue et
+        ne bloque plus les nouvelles.
         """
         if not self._borne_id:
             return
         try:
-            import requests
+            from datetime import timezone, timedelta
+            cutoff = (datetime.now(timezone.utc) - timedelta(minutes=10)).isoformat()
             r = supa.http_get(
                 f"{supa.SUPABASE_URL}/rest/v1/transactions"
                 f"?borne_id=eq.{self._borne_id}"
                 f"&impression_declenchee=eq.false"
+                f"&paiement_at=gte.{cutoff}"
                 f"&order=paiement_at.asc&limit=1&select=id,paiement_at",
                 headers=supa.HEADERS, timeout=5,
             )

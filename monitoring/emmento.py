@@ -681,15 +681,22 @@ class EmentoWatcher:
         order=asc : un signal d'impression correspond a la session qui vient
         de finir = la PLUS ANCIENNE pending. Avec desc, plusieurs paiements
         rapproches voyaient leur signal mal attribue (cf. fix similaire dans
-        cashinterface.py)."""
+        cashinterface.py).
+
+        v1.0.28.25 : filter temporel paiement_at >= now - 10min ajoute pour
+        eviter le meme bouchon que cashinterface.py (une tx ratee qui bloque
+        toutes les suivantes pour toujours)."""
         if not self._borne_id:
             return
         try:
+            from datetime import timezone as _tz, timedelta
+            cutoff = (datetime.now(_tz.utc) - timedelta(minutes=10)).isoformat()
             # Trouver la plus ancienne transaction sans impression confirmee
             r = supa.http_get(
                 f"{supa.SUPABASE_URL}/rest/v1/transactions"
                 f"?borne_id=eq.{self._borne_id}"
                 f"&impression_declenchee=eq.false"
+                f"&paiement_at=gte.{cutoff}"
                 f"&order=paiement_at.asc&limit=1&select=id,paiement_at",
                 headers=supa.HEADERS, timeout=5,
             )
