@@ -592,18 +592,80 @@ def get_printer_status_config():
 
 
 def verifier_pin(pin):
-    """Vérifie un PIN dans la table utilisateurs. Retourne le dict utilisateur ou None."""
-    try:
-        r = _call("get",
-            _url(f"utilisateurs?pin=eq.{pin}&select=id,nom,is_admin,voir_ca"),
-            headers=HEADERS, timeout=TIMEOUT,
-        )
-        if r.status_code == 200 and r.json():
-            user = r.json()[0]
-            user["role"] = "admin" if user.get("is_admin") else "technicien"
-            return user
-    except Exception:
-        pass
+    """Vérifie un PIN dans la table utilisateurs. Retourne le dict utilisateur ou None.
+
+    v1.0.28.27 : instrumentation activity_logger pour diagnostiquer les
+    refus PIN inexpliques (La Faluche 10/11 : PIN en base + curl OK depuis
+    la machine, mais le process agent refuse). Chaque appel loggue dans
+    alertes.log : duree du fetch, status HTTP, nb de users matches, retry
+    apres reset session si timeout."""
+    import time as _t
+    pin_log = (pin[:2] + "****") if len(pin) >= 2 else "****"
+    for attempt in (1, 2):
+        t0 = _t.time()
+        try:
+            r = _call("get",
+                _url(f"utilisateurs?pin=eq.{pin}&select=id,nom,is_admin,voir_ca"),
+                headers=HEADERS, timeout=TIMEOUT,
+            )
+            dur_ms = int((_t.time() - t0) * 1000)
+            users = r.json() if r.status_code == 200 else None
+            n = len(users) if isinstance(users, list) else -1
+            try:
+                import activity_logger as alog
+                alog.log_generic(
+                    "AUTH",
+                    f"verifier_pin({pin_log}) attempt={attempt} "
+                    f"status={r.status_code} match={n} dur={dur_ms}ms",
+                )
+            except Exception:
+                pass
+            if r.status_code == 200 and users:
+                user = users[0]
+                user["role"] = "admin" if user.get("is_admin") else "technicien"
+                return user
+            # Status 2xx mais 0 user → PIN vraiment incorrect, pas la peine
+            # de retry.
+            if r.status_code == 200:
+                return None
+            # Status != 2xx : probleme serveur, on retente apres reset session
+            if attempt == 1:
+                try:
+                    import activity_logger as alog
+                    alog.log_generic(
+                        "AUTH",
+                        f"verifier_pin FAIL status={r.status_code} -> reset session + retry",
+                    )
+                except Exception:
+                    pass
+                with _session_lock:
+                    _reset_session_locked()
+                continue
+            return None
+        except requests.exceptions.RequestException as e:
+            dur_ms = int((_t.time() - t0) * 1000)
+            try:
+                import activity_logger as alog
+                alog.log_generic(
+                    "AUTH",
+                    f"verifier_pin({pin_log}) attempt={attempt} "
+                    f"EXCEPTION {type(e).__name__}: {e} dur={dur_ms}ms",
+                )
+            except Exception:
+                pass
+            # Reseau mort : reset session + retry une fois
+            if attempt == 1:
+                with _session_lock:
+                    _reset_session_locked()
+                continue
+            return None
+        except Exception as e:
+            try:
+                import activity_logger as alog
+                alog.log_generic("AUTH", f"verifier_pin UNEXPECTED {type(e).__name__}: {e}")
+            except Exception:
+                pass
+            return None
     return None
 
 

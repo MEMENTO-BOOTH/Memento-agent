@@ -9,6 +9,7 @@ Flux :
 
 import sys
 import os
+import platform
 
 _log_dir = os.path.join(os.path.expanduser("~"), ".mementoagent")
 os.makedirs(_log_dir, exist_ok=True)
@@ -238,18 +239,78 @@ def _show_from_tray(app):
         _log(f"_show_from_tray: recreation LockScreen echec: {e}")
 
 
+def _acquire_windows_mutex():
+    """Acquiert un vrai Named Mutex Windows via kernel32. Atomique au niveau OS.
+
+    Contrairement a QLocalServer, pas de race condition si 2 process se
+    lancent en <500ms : CreateMutexW est atomique. Si un autre process a
+    deja le mutex, GetLastError = ERROR_ALREADY_EXISTS (183).
+
+    v1.0.28.27 : fix du bug double instance qui persistait malgre v1.0.28.21.
+    Observe MB-14 La Faluche et MB-18 opp : 2 process MementoAgent.exe actifs
+    simultanement a 2 s d'ecart (2 watchdogs ou watchdog + tache planifiee
+    qui bootent en parallele). Le mutex Qt QLocalServer n'arbitrait pas.
+    Retourne le handle du mutex (a garder en reference pour que le mutex ne
+    soit pas libere), ou None si une autre instance tourne."""
+    if platform.system() != "Windows":
+        return "non-windows"
+    try:
+        import ctypes
+        ERROR_ALREADY_EXISTS = 183
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.CreateMutexW.restype = ctypes.c_void_p
+        # bInitialOwner=False : on ne tient pas le mutex "owned", juste "existant",
+        # ce qui suffit pour la detection cross-process. Prefixe "Local\\" pour
+        # que le mutex soit par session utilisateur (pas global machine, l'agent
+        # tourne bien en user session).
+        mutex = kernel32.CreateMutexW(None, False, "Local\\MementoAgent_SingleInstance")
+        err = ctypes.get_last_error()
+        if err == ERROR_ALREADY_EXISTS:
+            # Un autre process a deja cree le mutex -> on exit
+            if mutex:
+                kernel32.CloseHandle(mutex)
+            return None
+        if not mutex:
+            # CreateMutex a echoue pour autre raison -> on laisse passer (safe)
+            _log(f"CreateMutexW failed err={err}, fallback QLocalServer")
+            return "fallback"
+        return mutex
+    except Exception as e:
+        _log(f"_acquire_windows_mutex exception: {e}, fallback QLocalServer")
+        return "fallback"
+
+
 def _check_single_instance(app):
-    """Retourne True si c'est la première instance, False si une autre tourne déjà."""
-    sock = QLocalSocket()
-    sock.connectToServer(_SERVER_NAME)
-    if sock.waitForConnected(500):
-        sock.write(b"show")
-        sock.flush()
-        sock.waitForBytesWritten(500)
-        sock.disconnectFromServer()
-        _log("another instance detected — sent show signal")
+    """Retourne True si c'est la première instance, False si une autre tourne déjà.
+
+    v1.0.28.27 : utilise un vrai Named Mutex Windows en priorite (atomique,
+    pas de race). Fallback sur QLocalServer si Windows API indisponible."""
+    mutex = _acquire_windows_mutex()
+    if mutex is None:
+        _log("another instance holds the Windows mutex — exiting")
+        # Reveil : tenter d'envoyer "show" a l'autre instance via QLocalSocket
+        sock = QLocalSocket()
+        sock.connectToServer(_SERVER_NAME)
+        if sock.waitForConnected(500):
+            sock.write(b"show")
+            sock.flush()
+            sock.waitForBytesWritten(500)
+            sock.disconnectFromServer()
         return False
 
+    # Garde le handle pour que le mutex ne soit pas libere avant la fin du process
+    if mutex not in ("non-windows", "fallback"):
+        app._windows_mutex = mutex
+        _log("Windows mutex acquired — first instance")
+
+    # Setup QLocalServer en + pour que les 2e lancements puissent reveiller
+    # la fenetre de la 1ere instance (meme logique qu'avant).
+    sock = QLocalSocket()
+    sock.connectToServer(_SERVER_NAME)
+    if sock.waitForConnected(100):
+        sock.disconnectFromServer()
+        # Un server existe deja mais le mutex est a nous -> ancien socket
+        # orphelin. On continue.
     QLocalServer.removeServer(_SERVER_NAME)
     server = QLocalServer()
     if not server.listen(_SERVER_NAME):
@@ -486,7 +547,11 @@ def main():
     # Empêche les doubles lancements — si une instance tourne, on la réveille puis on sort
     if not _check_single_instance(app):
         _log("exiting — another instance is running")
-        sys.exit(0)
+        # v1.0.28.27 : os._exit(0) au lieu de sys.exit(0). sys.exit leve
+        # SystemExit mais le bootloader PyInstaller attend les threads Qt
+        # internes -> le process reste visible en Get-Process meme apres
+        # === END ===. os._exit tue immediatement sans cleanup.
+        os._exit(0)
 
     # Croix rouge → cacher au lieu de fermer (l'app continue dans le tray)
     app._close_filter = _HideOnClose(app)
