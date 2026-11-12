@@ -25,6 +25,19 @@ def _log(msg):
 
 _log("=== START (import phase) ===")
 
+# v1.0.28.28 — CRITIQUE : installer le bundle CA persistant AVANT tout HTTPS.
+# Sans ca, quand le watchdog (ou Disk Cleanup) supprime le dossier
+# %TEMP%\_MEIxxxxx de l'instance en cours, requests leve
+# "OSError: Could not find a suitable TLS CA certificate bundle" et TOUT
+# le reseau casse : heartbeat, verifier_pin (PIN admin refuse), PATCH
+# transactions, alertes. Diagnostique sur Le confess le 13/11/2026.
+try:
+    import cert_bundle
+    _ca = cert_bundle.install_persistent_ca_bundle()
+    _log(f"CA bundle persistant: {_ca}")
+except Exception as _e:
+    _log(f"CA bundle install failed: {_e}")
+
 
 def _boot_alertes_log():
     """Ecrit une ligne 'BOOT' dans alertes.log DES le lancement, avant tout

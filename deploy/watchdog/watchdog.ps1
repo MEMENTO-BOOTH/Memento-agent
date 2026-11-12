@@ -68,14 +68,59 @@ function Write-WatchdogLog {
 }
 
 
+function Get-ProtectedMeiInfo {
+    # v1.0.28.28 : identifie les _MEI qu'il ne faut JAMAIS supprimer.
+    #
+    # Bug corrige (Le confess 13/11/2026) : le cleanup supprimait le _MEI de
+    # l'instance EN COURS des qu'il depassait 1 h. Or PyInstaller y garde
+    # certifi\cacert.pem -> des sa suppression, requests leve
+    # "OSError: Could not find a suitable TLS CA certificate bundle" et plus
+    # aucun HTTPS ne marche : heartbeat, PIN admin, PATCH transactions, tout
+    # casse jusqu'au prochain restart. L'ancien commentaire "l'instance en
+    # cours est protegee" etait faux : son _MEI vieillit comme les autres.
+    #
+    # Deux protections :
+    #   1. Noms des _MEI reellement charges par un process MementoAgent (lu
+    #      dans ses modules). Precis mais peut echouer en Access Denied.
+    #   2. StartTime du plus vieux agent actif : un _MEI cree APRES ce moment
+    #      appartient forcement a un agent vivant. Filet de securite qui
+    #      marche meme si (1) echoue.
+    $names = @{}
+    $oldestStart = $null
+    try {
+        foreach ($p in (Get-Process -Name $processName -ErrorAction SilentlyContinue)) {
+            try {
+                if ($null -eq $oldestStart -or $p.StartTime -lt $oldestStart) {
+                    $oldestStart = $p.StartTime
+                }
+            } catch {}
+            try {
+                foreach ($m in $p.Modules) {
+                    if ($m.FileName -match '\\(_MEI\d+)\\') { $names[$Matches[1]] = $true }
+                }
+            } catch {
+                # Access denied sur .Modules : on se repliera sur $oldestStart
+            }
+        }
+    } catch {}
+    return @{ Names = $names; OldestStart = $oldestStart }
+}
+
+
 function Invoke-MeiCleanup {
-    # Supprime les dossiers _MEI* > meiMinAgeMinutes dans le %TEMP% user.
-    # NE touche PAS aux dossiers recents (l'instance en cours est protegee).
+    # Supprime les dossiers _MEI* orphelins (> meiMinAgeMinutes) dans %TEMP%.
+    # Ne touche JAMAIS a un _MEI utilise par un agent en cours (cf.
+    # Get-ProtectedMeiInfo).
     try {
         $temp = [IO.Path]::GetTempPath()
         $cutoff = (Get-Date).AddMinutes(-$meiMinAgeMinutes)
+        $prot = Get-ProtectedMeiInfo
         $old = @(Get-ChildItem $temp -Directory -Force -Filter "_MEI*" -ErrorAction SilentlyContinue |
-            Where-Object { $_.CreationTime -lt $cutoff })
+            Where-Object {
+                $_.CreationTime -lt $cutoff -and
+                -not $prot.Names.ContainsKey($_.Name) -and
+                ($null -eq $prot.OldestStart -or $_.CreationTime -lt $prot.OldestStart)
+            })
         if ($old.Count -eq 0) {
             return
         }
@@ -88,7 +133,8 @@ function Invoke-MeiCleanup {
         }
         if ($n -gt 0) {
             $freeGo = [math]::Round((Get-PSDrive C).Free / 1GB, 1)
-            Write-WatchdogLog "_MEI cleanup: $n dossier(s) supprime(s) (libre: $freeGo Go)"
+            $nbProt = $prot.Names.Count
+            Write-WatchdogLog "_MEI cleanup: $n dossier(s) supprime(s), $nbProt protege(s) (libre: $freeGo Go)"
         }
     } catch {
         Write-WatchdogLog "_MEI cleanup erreur: $_"
@@ -187,7 +233,7 @@ function Test-CircuitBreakerOpen {
 }
 
 
-Write-WatchdogLog "=== Watchdog v1.0.28.21 demarre (check ${checkIntervalSec}s, grace ${graceDelaySec}s, max ${maxRestartsPerHour} restarts/h) ==="
+Write-WatchdogLog "=== Watchdog v1.0.28.28 demarre (check ${checkIntervalSec}s, grace ${graceDelaySec}s, max ${maxRestartsPerHour} restarts/h) ==="
 Invoke-MeiCleanup
 $lastMeiCleanupTs = Get-Date
 
