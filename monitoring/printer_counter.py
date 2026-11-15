@@ -182,7 +182,18 @@ class _PrinterHandle:
         Toute la sequence open+read+close tourne sous DNP_PORT_LOCK pour
         que le collector heartbeat ne tente pas de PortInitialize pendant
         qu'on tient le port (sinon il conclut a une deconnexion).
+
+        v1.0.28.29 : sur borne Kapsule, on ne touche JAMAIS au port DNP
+        (Kapsule le tient pour imprimer -> segfault C qui tue l'agent,
+        observe MB-50). On lit la valeur que Kapsule publie dans son
+        health.json. Pas de status DNP dans ce cas : seul le compteur
+        nous interesse pour la detection 'photo non sortie'.
         """
+        from .photo_app import is_kapsule_borne
+        if is_kapsule_borne():
+            from . import kapsule_printer
+            return kapsule_printer.read_media_counter(), None
+
         with DNP_PORT_LOCK:
             if not self.open():
                 return None, None

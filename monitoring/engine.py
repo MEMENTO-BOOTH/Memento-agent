@@ -145,17 +145,28 @@ class MonitoringEngine(QThread):
         if not is_kapsule_borne():
             self._emmento = EmentoWatcher(self._borne_id, self._nom_lieu)
         self._cash = CashInterfaceWatcher(self._borne_id)
-        # PrinterCounterWatcher poll la DLL Cx2Stat64 toutes les 3s. Sur borne
-        # Kapsule, Kapsule tient lui-meme le port DNP au moment du print ->
-        # conflit USB -> segfault C qui bypass faulthandler et tue le process
-        # (observe MB-50 : dashboard crash 3s apres ouverture). On desactive
-        # comme _setup_print_overlay en v1.0.28.4.
-        self._printer_counter = None
-        if not is_kapsule_borne():
-            self._printer_counter = PrinterCounterWatcher(
-                self._borne_id,
-                self._nom_lieu,
-            )
+        # PrinterCounterWatcher : detecte les paiements sans photo.
+        #
+        # Sur dslrBooth il poll la DLL Cx2Stat64 toutes les 3 s. Sur borne
+        # Kapsule c'etait interdit (Kapsule tient le port DNP au moment du
+        # print -> conflit USB -> segfault C qui bypass faulthandler et tue
+        # le process ; observe MB-50, dashboard crash 3 s apres ouverture),
+        # donc le watcher etait desactive depuis v1.0.28.13.
+        #
+        # v1.0.28.29 : on le reactive sur Kapsule, mais SANS acces USB —
+        # _PrinterHandle.read_counter_and_status() lit le compteur publie
+        # par Kapsule dans son health.json. Le risque de segfault qui avait
+        # motive la desactivation disparait, et les bornes Kapsule
+        # retrouvent la detection 'photo non sortie' (218 paiements non
+        # surveilles sur 259 entre le 13 et le 15/11).
+        #
+        # Retrocompatible : tant que Kapsule ne publie pas le champ,
+        # read_media_counter() renvoie None et le watcher reste silencieux
+        # exactement comme avant.
+        self._printer_counter = PrinterCounterWatcher(
+            self._borne_id,
+            self._nom_lieu,
+        )
         drive_folder = f"{self._nom_lieu} ({borne.get('code', socket.gethostname())})"
         self._drive = DriveBackup(drive_folder, self._borne_id)
         self._kapsule = KapsuleWatcher(self._borne_id, self._nom_lieu)
