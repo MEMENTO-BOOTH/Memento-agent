@@ -84,16 +84,22 @@ def _log_hb(msg):
 
 def envoyer_heartbeat(borne_id, donnees):
     """UPSERT dans la table heartbeats — une seule ligne par borne."""
-    # Retirer les champs qui ne sont pas dans la table heartbeats
-    # capacite_imprimante : ajoute en v1.0.28.11 cote lire_imprimante() pour le
-    # donut UI du dashboard local, mais la colonne n'existe pas dans la table
-    # Supabase heartbeats -> POST rejette en 400 et perd silencieusement le
-    # heartbeat (bug observe MB-16/MB-31/MB-37 en v1.0.28.14 : agent tourne
-    # localement, aucun HB n'arrive a Supabase pendant >27 min).
+    # Retirer les champs qui ne sont pas dans la table heartbeats. Un champ
+    # sans colonne fait rejeter le POST en 400 et perdre le heartbeat (bug
+    # observe MB-16/MB-31/MB-37 en v1.0.28.14 : agent vivant localement, aucun
+    # HB n'arrivant a Supabase pendant >27 min).
+    #
+    # capacite_imprimante : ENVOYE depuis v1.0.28.32. La colonne
+    # heartbeats.capacite_imprimante (integer, nullable) existe en prod depuis
+    # le 18/11/2026. 400 pour une DS620, 700 pour une DS-RX1 : le dashboard web
+    # en a besoin pour calculer le pourcentage papier, il avait 400 en dur et
+    # affichait faux pour MB-50. Valeur null (bornes pas encore a jour) -> le
+    # dashboard replie sur 400.
+    #
     # imprimante_dll : ajoute en v1.0.28.30, sert uniquement a alertes_monitor
     # pour savoir si les codes de statut remontes sont ceux d'un modele valide
     # en production. Pas de colonne Supabase, donc a exclure comme les autres.
-    exclure = {"imprimante_statut_code", "wifi_speed_mbps", "wifi_qualite", "nom_imprimante", "capacite_imprimante", "imprimante_dll"}
+    exclure = {"imprimante_statut_code", "wifi_speed_mbps", "wifi_qualite", "nom_imprimante", "imprimante_dll"}
     data = {k: v for k, v in donnees.items() if k not in exclure}
     data["borne_id"] = borne_id
     data["timestamp"] = datetime.now().astimezone().isoformat()

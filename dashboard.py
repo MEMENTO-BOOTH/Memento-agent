@@ -1304,14 +1304,17 @@ class DashboardWindow(QMainWindow):
                 # Capacite dynamique selon le modele d'imprimante (DS620=400,
                 # DS-RX1=700, DS820=230, DS40=400, DS80=260, QW410=230).
                 #
-                # ATTENTION : hb vient de Supabase, dont la table heartbeats
-                # n'a NI capacite_imprimante NI nom_imprimante (exclus du
-                # payload, cf. envoyer_heartbeat). Les deux lectures ci-dessous
-                # rendent donc None, et get_media_capacity(None) rend 400 :
-                # ce chemin affichait 400 pour toutes les bornes. On prend
-                # d'abord la capacite connue localement, que le monitoring a
-                # calculee a partir de l'imprimante reellement detectee.
-                total = hb.get("capacite_imprimante") or self._capacite_locale
+                # hb vient de Supabase. capacite_imprimante y est envoyee depuis
+                # v1.0.28.32, mais vaut null tant que la borne n'a pas emis de
+                # heartbeat avec cette version ; nom_imprimante n'y est jamais
+                # (pas de colonne). Avant, ce chemin tombait sur
+                # get_media_capacity(None) = 400 pour toutes les bornes.
+                #
+                # Priorite a la capacite connue LOCALEMENT : elle vient de
+                # l'imprimante reellement detectee a l'instant, alors que la
+                # ligne Supabase peut retarder d'un heartbeat (imprimante
+                # changee, premiere emission apres mise a jour).
+                total = self._capacite_locale or hb.get("capacite_imprimante")
                 if not total:
                     try:
                         from monitoring.alertes.constants import get_media_capacity

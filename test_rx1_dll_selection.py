@@ -626,13 +626,22 @@ def test_imprimante_dll_hors_payload_heartbeat():
         heartbeat.envoyer_heartbeat("borne-test", {
             "imprimante_statut": "En veille",
             "imprimante_dll": "CyStat64.dll",
+            "nom_imprimante": "DS-RX1",
+            "capacite_imprimante": 700,
             "feuilles_restantes": 430,
         })
 
     assert "imprimante_dll" not in envoye, \
         "imprimante_dll ne doit pas partir vers Supabase (colonne inexistante)"
+    assert "nom_imprimante" not in envoye, \
+        "nom_imprimante n'a toujours pas de colonne"
     assert envoye.get("feuilles_restantes") == 430, "le reste doit bien partir"
-    print("[OK] heartbeat : imprimante_dll exclu du payload Supabase")
+    # v1.0.28.32 : la colonne heartbeats.capacite_imprimante existe en prod
+    # depuis le 18/11/2026. Le dashboard web en a besoin : il avait 400 en dur
+    # et affichait un pourcentage faux pour MB-50 (rouleaux de 700).
+    assert envoye.get("capacite_imprimante") == 700, \
+        f"capacite_imprimante doit partir vers Supabase, got {envoye.get('capacite_imprimante')}"
+    print("[OK] heartbeat : capacite envoyee, imprimante_dll et nom exclus")
 
 
 def test_jauge_papier_capacite_rx1():
@@ -677,14 +686,23 @@ def test_jauge_papier_capacite_rx1():
     #    personnel vide et un ssid.
     import tempfile
     with tempfile.TemporaryDirectory() as home_vide,          patch("os.path.expanduser", return_value=home_vide):
-        def _charger(capacite_locale, feuilles):
+        def _charger(capacite_locale, feuilles, capacite_supabase=None):
             fen_sb = MagicMock()
             fen_sb._capacite_locale = capacite_locale
             W._apply_data(fen_sb, {"heartbeat": {
-                "feuilles_restantes": feuilles, "ssid_wifi": "test"}})
+                "feuilles_restantes": feuilles, "ssid_wifi": "test",
+                "capacite_imprimante": capacite_supabase}})
             return fen_sb
 
         _charger(700, 430)._maj_jauge_papier.assert_called_with(430, 700)
+
+        # v1.0.28.32 : Supabase porte aussi la capacite. Elle sert quand le
+        # monitoring local n'a encore rien lu...
+        _charger(None, 430, 700)._maj_jauge_papier.assert_called_with(430, 700)
+        # ...mais la lecture locale, faite a l'instant sur l'imprimante
+        # reellement branchee, prime sur une ligne Supabase en retard d'un
+        # heartbeat (imprimante changee entre-temps).
+        _charger(700, 430, 400)._maj_jauge_papier.assert_called_with(430, 700)
 
         # 2bis. Fenetre ouverte avant tout cycle de monitoring ET sans cache :
         #       comportement d'avant (400), sans planter.
