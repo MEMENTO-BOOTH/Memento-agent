@@ -44,6 +44,43 @@ def _is_ds620(name):
     return any(p.upper() in n for p in PRINTER_PATTERNS)
 
 
+def _ds620_presente():
+    """Vrai si une DS620 est declaree dans le registre Windows.
+
+    L'overlay n'utilise que Cx2Stat64, qui ne supporte que la DS620. Avant
+    v1.0.28.30 il ouvrait les ports USB a l'aveugle : sur une borne equipee
+    d'une DS-RX1, l'appel segfaultait et tuait le process agent (MB-50).
+    On verifie donc d'abord qu'il y a bien une DS620 a interroger.
+
+    Ne leve jamais : en cas de doute on retourne False et l'overlay se passe
+    de la DLL (il garde sa detection par l'API Windows d'impression)."""
+    try:
+        import winreg
+        from monitoring.alertes.constants import get_printer_dll
+        reg = r"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Print\Printers"
+        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, reg) as key:
+            for i in range(100):
+                try:
+                    name = winreg.EnumKey(key, i)
+                except OSError:
+                    break
+                try:
+                    with winreg.OpenKey(
+                        winreg.HKEY_LOCAL_MACHINE, f"{reg}\\{name}"
+                    ) as pk:
+                        try:
+                            driver, _ = winreg.QueryValueEx(pk, "Printer Driver")
+                        except OSError:
+                            driver = ""
+                    if get_printer_dll(name, driver) == "Cx2Stat64.dll":
+                        return True
+                except OSError:
+                    continue
+    except Exception as e:
+        _log(f"_ds620_presente erreur: {e}")
+    return False
+
+
 def _find_dll():
     here = os.path.dirname(os.path.abspath(__file__))
     mon_dir = os.path.normpath(os.path.join(here, os.pardir, "monitoring"))
@@ -131,6 +168,24 @@ class PrintStartDetector(QObject):
 
     def _init_dll(self):
         if platform.system() != "Windows":
+            return
+        # v1.0.28.30 : ne pas ouvrir Cx2Stat64 sur une borne qui n'a aucune
+        # DS620. La boucle ci-dessous teste USB004->USB001 a l'aveugle, et
+        # tomber sur une DS-RX1 provoque un segfault natif qui tue le process
+        # agent entier (MB-50, v1.0.28.9).
+        #
+        # PORTEE EXACTE DE CE GARDE, pour ne pas s'y fier plus qu'il ne vaut :
+        # il repond a "y a-t-il UNE DS620 quelque part dans le registre ?",
+        # pas a "le port que je m'apprete a ouvrir est-il celui d'une DS620 ?".
+        # Sur une machine ou une RX1 a remplace une DS620 en laissant l'ancienne
+        # entree registre, il renvoie True et la boucle sonde quand meme le port
+        # de la RX1. Ce cas n'existe pas dans le parc actuel (MB-50, seule RX1,
+        # n'a qu'une entree registre "DS-RX1" — verifie le 18/11/2026) et
+        # l'overlay est de toute facon desactive sur les bornes Kapsule
+        # (main.py). Le correctif complet serait de lire le Port de l'entree
+        # DS620 identifiee et de n'ouvrir que celui-la, au lieu du balayage.
+        if not _ds620_presente():
+            _log("pas de DS620 detectee — overlay DLL desactive")
             return
         dll_path = _find_dll()
         if not dll_path:

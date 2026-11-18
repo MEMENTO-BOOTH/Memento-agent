@@ -8,13 +8,16 @@ a = Analysis(
     datas=[
         ('assets', 'assets'),
         ('monitoring/coupe_2pouces/Cx2Stat64.dll', 'monitoring/coupe_2pouces'),
+        # v1.0.28.30 : DLL de statut des DS-RX1 (Printer Status API). Cx2Stat64
+        # ne sait pas lire une RX1 et segfault dessus (MB-50, v1.0.28.9).
+        ('monitoring/coupe_2pouces/CyStat64.dll', 'monitoring/coupe_2pouces'),
     ],
     hiddenimports=[
         'auth', 'auth.lock_screen',
         'setup', 'setup.setup_window', 'setup.install_page', 'setup.progress_page', 'setup.config_page', 'setup.styles',
         'settings', 'settings.config', 'settings.settings_widget', 'settings.widgets', 'settings.worker',
         'alertes', 'alertes.alertes_widget', 'alertes.data', 'alertes.filters', 'alertes.filter_bar', 'alertes.stats', 'alertes.stat_cards', 'alertes.table',
-        'monitoring', 'monitoring.engine', 'monitoring.emmento', 'monitoring.drive_backup', 'monitoring.cashinterface', 'monitoring.printer_standby', 'monitoring.dslrbooth_config', 'monitoring.pending_queue', 'monitoring.dnp_lock', 'monitoring.code_pool', 'monitoring.kapsule_watcher', 'monitoring.kapsule_emmento_watcher', 'monitoring.photo_app',
+        'monitoring', 'monitoring.engine', 'monitoring.emmento', 'monitoring.drive_backup', 'monitoring.cashinterface', 'monitoring.printer_standby', 'monitoring.dslrbooth_config', 'monitoring.pending_queue', 'monitoring.dnp_lock', 'monitoring.dnp_dll', 'monitoring.code_pool', 'monitoring.kapsule_watcher', 'monitoring.kapsule_emmento_watcher', 'monitoring.photo_app', 'monitoring.kapsule_printer',
         'monitoring.collectors', 'monitoring.collectors.heartbeat', 'monitoring.collectors.printer', 'monitoring.collectors.system',
         'monitoring.alertes', 'monitoring.alertes.alertes_monitor', 'monitoring.alertes.constants',
         'monitoring.coupe_2pouces', 'monitoring.coupe_2pouces.coupe', 'monitoring.coupe_2pouces.activer_coupe_2pouces', 'monitoring.coupe_2pouces.desactiver_coupe_2pouces',

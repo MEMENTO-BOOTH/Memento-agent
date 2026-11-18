@@ -90,7 +90,10 @@ def envoyer_heartbeat(borne_id, donnees):
     # Supabase heartbeats -> POST rejette en 400 et perd silencieusement le
     # heartbeat (bug observe MB-16/MB-31/MB-37 en v1.0.28.14 : agent tourne
     # localement, aucun HB n'arrive a Supabase pendant >27 min).
-    exclure = {"imprimante_statut_code", "wifi_speed_mbps", "wifi_qualite", "nom_imprimante", "capacite_imprimante"}
+    # imprimante_dll : ajoute en v1.0.28.30, sert uniquement a alertes_monitor
+    # pour savoir si les codes de statut remontes sont ceux d'un modele valide
+    # en production. Pas de colonne Supabase, donc a exclure comme les autres.
+    exclure = {"imprimante_statut_code", "wifi_speed_mbps", "wifi_qualite", "nom_imprimante", "capacite_imprimante", "imprimante_dll"}
     data = {k: v for k, v in donnees.items() if k not in exclure}
     data["borne_id"] = borne_id
     data["timestamp"] = datetime.now().astimezone().isoformat()

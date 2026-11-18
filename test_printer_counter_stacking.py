@@ -61,6 +61,7 @@ def make_watcher(printer):
     w._printer = printer
     w._history = deque(maxlen=400)
     w._resolved = set()
+    w._sans_preuve = set()
     w._on_print_started = None
     w._last_status_code = None
     w._failed_events = []
@@ -365,6 +366,49 @@ def test_bug_dnp_drop_garde_fou():
     print(f"[OK] test_bug_dnp_drop_garde_fou : drop aberrant ignore")
 
 
+
+def test_pas_de_preuve_pas_accusation():
+    """GARDE-FOU v1.0.28.30 : sans AUCUNE donnee de compteur, on ne conclut
+    pas "photo non sortie".
+
+    C'est la cause directe des 13 fausses alertes de MB-50 entre le 15 et le
+    18/11/2026 : la RX1 etait illisible, feuilles_avant et feuilles_apres
+    etaient NULL sur les 13 transactions, et l'agent accusait quand meme au
+    bout de 180 s. Le gerant a recu 13 SMS pour rien.
+
+    Lire 122 avant et 122 apres, c'est une preuve. N'avoir rien lu du tout,
+    c'est l'exact oppose."""
+    printer = FakePrinterDead()      # compteur illisible
+    w = make_watcher(printer)
+    w._history.clear()               # et aucun historique : on ne sait RIEN
+
+    now = datetime.now(timezone.utc)
+    pending = [
+        {"id": "tx-aveugle", "paiement_at": iso_utc(now - timedelta(seconds=200)),
+         "feuilles_avant": None},
+    ]
+    patches = []
+    install_fakes(w, pending, patches)
+
+    w.tick()
+
+    accusations = [p for p in patches
+                   if p[1].get("anomalie_impression") == "non_delivree"
+                   or p[1].get("_alerte") == "non_delivree"]
+    assert not accusations, f"aucune accusation sans preuve, got {accusations}"
+    assert "tx-aveugle" not in w._resolved,         "la tx doit rester en attente, pas etre classee"
+
+    # Et des que le compteur redevient lisible, la detection reprend :
+    # la meme transaction doit alors etre traitee normalement.
+    w._history.append((now - timedelta(seconds=300), 150))
+    w.tick()
+    accusations = [p for p in patches
+                   if p[1].get("anomalie_impression") == "non_delivree"]
+    assert accusations, "avec une donnee de compteur, l'accusation doit repartir"
+    assert accusations[0][1].get("feuilles_apres") == 150
+    print("[OK] test_pas_de_preuve_pas_accusation : silence sans compteur, detection des qu'il revient")
+
+
 if __name__ == "__main__":
     test_two_clients_one_print()
     test_two_clients_two_prints_same_tick()
@@ -375,4 +419,5 @@ if __name__ == "__main__":
     test_bug4_tz_real_deadline_still_works()
     test_bug_dnp_counter_zero_en_veille()
     test_bug_dnp_drop_garde_fou()
+    test_pas_de_preuve_pas_accusation()
     print("\nTous les tests OK !")

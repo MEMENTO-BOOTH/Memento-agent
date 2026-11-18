@@ -97,6 +97,10 @@ _alertes_cache_loaded = False
 _imprimante_disconnect_ticks = 0
 IMPRIMANTE_DECONNECT_CONFIRMATION_TICKS = 2
 
+# Dernier code de statut non interprete deja journalise. Evite de reecrire la
+# meme ligne a chaque heartbeat quand le code est stable (~1 400/jour sinon).
+_dernier_code_non_interprete = None
+
 # Meme pattern pour camera_deconnectee : appareil_connecte=False sur une seule
 # lecture isolee (USB transient, lecture WIA ratee) declenchait l'alerte +
 # SMS. Constate sur MB-18 et MB-29 le 19/06 a ~5h d'intervalle.
@@ -503,7 +507,44 @@ def verifier_alertes(borne_id, nom_lieu, donnees):
     # 1. ALERTES IMPRIMANTE (codes DNP)
     # ══════════════════════════════════════════════
 
-    if status and status in ALERTES_CRITIQUES:
+    # v1.0.28.30 : toutes les tables de codes ci-dessous (ALERTES_CRITIQUES,
+    # ALERTES_WARNING, SEUIL_ERREUR_MECANIQUE, CODES_NORMAUX) ont ete
+    # construites et validees sur la DS620. Les appliquer a un modele dont on
+    # n'a pas encore observe les codes reels est un pari a sens unique :
+    #   - une collision sur un des 7 codes d'ALERTES_CRITIQUES declenche une
+    #     alerte critique, un SMS, ET l'ecran de rupture plein ecran qui
+    #     bloque la borne pour les clients ;
+    #   - une collision sur CODES_NORMAUX resout a tort 9 types d'alertes.
+    # Sur la RX1, un seul code a ete observe a ce jour (0x00010001 "En
+    # veille", identique a la DS620) : c'est encourageant, pas suffisant.
+    # Tant que le modele n'est pas valide, on journalise le code brut sans
+    # rien en conclure. C'est ainsi qu'on constituera la table.
+    #
+    # dll_utilisee None = chemin qui ne renseigne pas la clef (cache
+    # heartbeat, ou status deja None) -> comportement d'avant, inchange.
+    from .constants import STATUS_CODES_TRUSTED_DLLS
+    dll_utilisee = donnees.get("imprimante_dll")
+    codes_fiables = dll_utilisee is None or dll_utilisee in STATUS_CODES_TRUSTED_DLLS
+
+    if status and not codes_fiables:
+        global _dernier_code_non_interprete
+        if status != _dernier_code_non_interprete:
+            # Deduplique : sans ca, un code stable ecrirait une ligne par
+            # heartbeat (~1 400/jour) et noierait le seul code qui nous
+            # interesse vraiment, celui d'une vraie panne.
+            _dernier_code_non_interprete = status
+            print(f"  [ALERTES] code 0x{status:08X} non interprete ({dll_utilisee}) - aucune conclusion")
+            try:
+                import activity_logger as alog
+                alog.log_generic(
+                    "ALERTES",
+                    f"code statut 0x{status:08X} observe sur {dll_utilisee} "
+                    f"- non interprete (modele pas encore valide)",
+                )
+            except Exception:
+                pass
+
+    elif status and status in ALERTES_CRITIQUES:
         info = ALERTES_CRITIQUES[status]
         if not _alerte_deja_ouverte(borne_id, info["type"]):
             _creer_alerte(borne_id, info["type"], "imprimante",
@@ -520,8 +561,10 @@ def verifier_alertes(borne_id, nom_lieu, donnees):
             _creer_alerte(borne_id, info["type"], "imprimante",
                           f"{info['message']} ({bar})", "warning")
 
-    # Statut normal → résoudre les alertes imprimante
-    if status and status in CODES_NORMAUX:
+    # Statut normal → résoudre les alertes imprimante.
+    # Gardé aussi : resoudre une alerte sur la foi d'un code qu'on ne sait pas
+    # lire reviendrait a effacer une vraie panne.
+    if status and codes_fiables and status in CODES_NORMAUX:
         _resoudre_alertes(borne_id, [
             "bourrage_papier", "fin_papier", "fin_ruban", "erreur_ruban",
             "capot_ouvert", "bac_chutes_plein", "erreur_mecanique", "erreur_donnees",

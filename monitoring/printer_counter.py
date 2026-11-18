@@ -47,33 +47,34 @@ TX_LOOKBACK_S = 300                   # transactions a prendre en compte (5 min)
 MAX_DROP_PER_TICK = 20
 
 
-# --- Localisation DLL et imprimante (reprise de collectors/printer.py) ---
-def _find_dll():
-    monitoring_dir = os.path.dirname(os.path.abspath(__file__))
-    candidates = [
-        os.path.join(monitoring_dir, "coupe_2pouces", "Cx2Stat64.dll"),
-        os.path.join(monitoring_dir, "Cx2Stat64.dll"),
-    ]
-    if hasattr(sys, "_MEIPASS"):
-        candidates.insert(
-            0,
-            os.path.join(sys._MEIPASS, "monitoring", "coupe_2pouces", "Cx2Stat64.dll"),
-        )
-    for c in candidates:
-        if os.path.exists(c):
-            return c
-    return None
+# --- Localisation DLL et imprimante -----------------------------------
+# La recherche de chemin vit maintenant dans dnp_dll.py (partagee avec
+# collectors/printer.py). _find_dll est garde comme alias de compat.
+def _find_dll(dll_name="Cx2Stat64.dll"):
+    from .dnp_dll import find_dll_path
+    return find_dll_path(dll_name)
+
+
+def _printer_dll_for(name, driver=None):
+    """Retourne la DLL de statut a utiliser pour cette imprimante, ou None.
+
+    IMPORTANT : ce watcher polle la DLL toutes les 3 s. On NE DOIT appeler
+    PortInitialize qu'avec la DLL qui correspond au modele. Appeler Cx2Stat64
+    sur une DS-RX1 provoque un segfault natif qui tue le process agent entier
+    (observe v1.0.28.9 sur MB-50). Depuis v1.0.28.30 les RX1 ont leur propre
+    DLL (CyStat64) et sont donc lisibles ; les modeles sans DLL connue
+    (DS820, DS40, DS80, QW410) retournent None et ne sont jamais interroges.
+
+    Sur borne Kapsule, ce chemin n'est atteint que pour les modeles que
+    Kapsule ne sait pas lire (cf. KAPSULE_HEALTH_JSON_DLLS) : pour une DS620,
+    read_counter_and_status() s'en tient a health.json."""
+    from .alertes.constants import get_printer_dll
+    return get_printer_dll(name, driver)
 
 
 def _is_ds620(name):
-    # IMPORTANT: ce watcher polle la DLL Cx2Stat64 toutes les 3s. On NE DOIT
-    # appeler PortInitialize que sur une DS620 reellement supportee par la DLL.
-    # Appeler sur DS-RX1 (ou autres DNP non-DS620) peut provoquer un segfault
-    # natif qui tue le process agent entier (observe v1.0.28.9 sur MB-50).
-    # On garde donc le filtrage specifique DS620 ici, pas la detection DNP
-    # generique.
-    from .alertes.constants import is_cx2stat_compatible
-    return is_cx2stat_compatible(name)
+    """Alias de compat. Vrai si une DLL de statut existe pour ce modele."""
+    return _printer_dll_for(name) is not None
 
 
 class _PrinterHandle:
@@ -81,27 +82,24 @@ class _PrinterHandle:
 
     def __init__(self):
         self.dll = None
+        self.dll_name = None   # DLL retenue : determine la fonction compteur
         self.h_port = -1
         self.name = None
         self.port = None
+        # Log "DNP <modele> via <dll>" une seule fois, pas a chaque tick (3 s)
+        self._dll_logged = False
 
-    def open(self):
+    def _candidats(self):
+        """Liste triee des imprimantes DNP lisibles : [(nom, port, dll), ...].
+
+        Separe de open() pour pouvoir connaitre le modele branche SANS ouvrir
+        le port. Sur une borne Kapsule, le choix entre health.json et lecture
+        directe depend du modele : il ne faut pas ouvrir un port pour
+        decouvrir ensuite qu'on n'aurait pas du."""
         if platform.system() != "Windows":
-            return False
-        if self.h_port >= 0:
-            return True
-        dll_path = _find_dll()
-        if not dll_path:
-            return False
+            return []
         try:
             import winreg
-            self.dll = ctypes.WinDLL(dll_path)
-            self.dll.PortInitialize.argtypes = [ctypes.c_wchar_p]
-            self.dll.PortInitialize.restype = ctypes.c_int
-            self.dll.GetStatus.argtypes = [ctypes.c_int]
-            self.dll.GetStatus.restype = ctypes.c_uint
-            self.dll.GetMediaCounter.argtypes = [ctypes.c_int]
-            self.dll.GetMediaCounter.restype = ctypes.c_int
 
             reg_path = r"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Print\Printers"
             candidats = []
@@ -118,12 +116,20 @@ class _PrinterHandle:
                     except OSError:
                         break
                     try:
-                        if _is_ds620(name):
-                            with winreg.OpenKey(
-                                winreg.HKEY_LOCAL_MACHINE, f"{reg_path}\\{name}"
-                            ) as pk:
-                                port, _ = winreg.QueryValueEx(pk, "Port")
-                                candidats.append((name, port))
+                        # v1.0.28.30 : on retient la DLL propre a chaque modele.
+                        # Le driver du registre prime sur le nom affiche, qui
+                        # est librement editable par l'operateur.
+                        with winreg.OpenKey(
+                            winreg.HKEY_LOCAL_MACHINE, f"{reg_path}\\{name}"
+                        ) as pk:
+                            port, _ = winreg.QueryValueEx(pk, "Port")
+                            try:
+                                driver, _ = winreg.QueryValueEx(pk, "Printer Driver")
+                            except OSError:
+                                driver = ""
+                        dll_name = _printer_dll_for(name, driver)
+                        if dll_name:
+                            candidats.append((name, port, dll_name))
                     except OSError:
                         continue
 
@@ -136,26 +142,76 @@ class _PrinterHandle:
             # instable, impression_verifiee_papier aleatoire. Meme pattern que
             # le fix cote Kapsule Bar (src/main/printer/windows-driver.ts
             # resolveLivePrinter).
-            candidats.sort(key=lambda x: (len(x[0]), x[0]))
+            # Cx2Stat64 (DS620) d'abord : cf. dll_probe_rank. La longueur du
+            # nom est arbitraire vis-a-vis du modele, et sonder une RX1 avant
+            # la DS620 reviendrait a essayer le chemin neuf avant le chemin
+            # eprouve sur ~28 bornes.
+            from .alertes.constants import dll_probe_rank, ecarter_ports_ambigus
+            candidats.sort(key=lambda x: (dll_probe_rank(x[2]), len(x[0]), x[0]))
+            # Meme port revendique par deux familles DNP = on ignore ce port.
+            # Le registre decrit un pilote, pas le materiel reellement branche.
+            candidats, _ecartes = ecarter_ports_ambigus(candidats)
+            return candidats
+        except Exception as e:
+            print(f"[PRINTER_COUNTER] Erreur scan registre: {e}")
+            return []
 
-            # PortInitialize + PortRelease serialises via DNP_PORT_LOCK pour
-            # ne pas entrer en conflit avec le collector heartbeat. Sans ce
-            # lock, quand printer_counter poll toutes les 3s et que le
-            # heartbeat tombe pile au meme moment, l'un des deux echoue et
-            # l'agent conclut a une 'Imprimante deconnectee' (fausse alerte).
+    def open(self):
+        if platform.system() != "Windows":
+            return False
+        if self.h_port >= 0:
+            return True
+        candidats = self._candidats()
+        if not candidats:
+            return False
+        try:
+            from .dnp_dll import load_dll
+
+            # PortInitialize serialise via DNP_PORT_LOCK pour ne pas entrer en
+            # conflit avec le collector heartbeat. Sans ce lock, quand
+            # printer_counter poll toutes les 3s et que le heartbeat tombe
+            # pile au meme moment, l'un des deux echoue et l'agent conclut a
+            # une 'Imprimante deconnectee' (fausse alerte).
             with DNP_PORT_LOCK:
-                for name, port in candidats:
-                    h = self.dll.PortInitialize(port)
-                    if h >= 0 and self.dll.GetStatus(h) != 0x80000000:
+                for name, port, dll_name in candidats:
+                    dll = load_dll(dll_name)
+                    if dll is None:
+                        continue
+                    try:
+                        dll.PortInitialize.argtypes = [ctypes.c_wchar_p]
+                        dll.PortInitialize.restype = ctypes.c_int
+                        dll.GetStatus.argtypes = [ctypes.c_int]
+                        dll.GetStatus.restype = ctypes.c_uint
+                        dll.GetMediaCounter.argtypes = [ctypes.c_int]
+                        dll.GetMediaCounter.restype = ctypes.c_int
+                        h = dll.PortInitialize(port)
+                    except Exception:
+                        continue
+                    if h >= 0 and dll.GetStatus(h) != 0x80000000:
+                        self.dll = dll
+                        self.dll_name = dll_name
                         self.name = name
                         self.port = port
                         self.h_port = h
+                        if not self._dll_logged:
+                            # alertes.log, pas stdout : c'est la seule trace
+                            # exploitable a distance pour savoir quelle DLL
+                            # l'agent a retenue sur une borne donnee.
+                            msg = f"DNP {name} lue via {dll_name} (port {port})"
+                            print(f"[PRINTER_COUNTER] {msg}")
+                            try:
+                                import activity_logger as alog
+                                alog.log_generic("PRINTER_COUNTER", msg)
+                            except Exception:
+                                pass
+                            self._dll_logged = True
                         return True
                     if h >= 0:
-                        try:
-                            self.dll.PortRelease(h)
-                        except Exception:
-                            pass
+                        # PortRelease n'existe dans aucune des deux DLL
+                        # (verifie 18/11/2026), on passe par call_optional
+                        # pour que ce soit explicite plutot qu'avale.
+                        from .dnp_dll import call_optional
+                        call_optional(dll, "PortRelease", h)
             return False
         except Exception as e:
             print(f"[PRINTER_COUNTER] Erreur init DLL: {e}")
@@ -183,26 +239,50 @@ class _PrinterHandle:
         que le collector heartbeat ne tente pas de PortInitialize pendant
         qu'on tient le port (sinon il conclut a une deconnexion).
 
-        v1.0.28.29 : sur borne Kapsule, on ne touche JAMAIS au port DNP
-        (Kapsule le tient pour imprimer -> segfault C qui tue l'agent,
-        observe MB-50). On lit la valeur que Kapsule publie dans son
-        health.json. Pas de status DNP dans ce cas : seul le compteur
-        nous interesse pour la detection 'photo non sortie'.
+        Borne Kapsule : on privilegie la valeur que Kapsule publie dans son
+        health.json, pour ne pas lui disputer le port qu'il tient pour
+        imprimer. Pas de status DNP dans ce cas : seul le compteur nous
+        interesse pour la detection 'photo non sortie'.
+        v1.0.28.30 : exception pour les modeles que Kapsule ne sait pas lire.
+        Il n'embarque que Cx2Stat64, donc une DS-RX1 n'apparaitra jamais dans
+        son health.json ; l'agent la lit alors directement, puisque personne
+        d'autre ne tient ce port.
         """
         from .photo_app import is_kapsule_borne
         if is_kapsule_borne():
             from . import kapsule_printer
-            return kapsule_printer.read_media_counter(), None
+            from .alertes.constants import KAPSULE_HEALTH_JSON_DLLS
+            counter = kapsule_printer.read_media_counter()
+            if counter is not None:
+                return counter, None
+            # health.json muet. Deux causes possibles, et elles n'appellent
+            # pas la meme reponse :
+            #  - Kapsule sait lire ce modele mais n'a pas encore publie
+            #    (demarrage, impression en cours) -> on attend, on ne va pas
+            #    lui disputer le port.
+            #  - Kapsule ne sait PAS lire ce modele. Il n'embarque que
+            #    Cx2Stat64 : pour une DS-RX1 il ne publiera jamais rien, et
+            #    attendre revient a rester aveugle indefiniment (MB-50, 13
+            #    fausses alertes "photo non sortie" depuis le 15/11). Dans ce
+            #    cas on lit le port nous-memes : Kapsule ne le tient pas,
+            #    puisqu'il ne sait pas l'ouvrir.
+            cands = self._candidats()
+            if not cands or cands[0][2] in KAPSULE_HEALTH_JSON_DLLS:
+                return None, None
 
         with DNP_PORT_LOCK:
             if not self.open():
                 return None, None
             try:
-                counter = self.dll.GetMediaCounter(self.h_port)
+                from .dnp_dll import read_media_counter
+                # GetMediaCounter sur DS620, GetMediaCounter_R sur RX1 :
+                # cf. MEDIA_COUNTER_FUNC. Sur une RX1, GetMediaCounter
+                # renvoie 50 de trop (480 au lieu de 430, mesure MB-50).
+                counter = read_media_counter(self.dll, self.dll_name, self.h_port)
                 status = self.dll.GetStatus(self.h_port)
                 self.close()
                 return (
-                    counter if counter > 0 else None,
+                    counter if counter is not None and counter > 0 else None,
                     status if status != 0x80000000 else None,
                 )
             except Exception:
@@ -212,10 +292,13 @@ class _PrinterHandle:
     def close(self):
         with DNP_PORT_LOCK:
             if self.dll and self.h_port >= 0:
-                try:
-                    self.dll.PortRelease(self.h_port)
-                except Exception:
-                    pass
+                # PortRelease n'existe dans aucune des deux DLL DNP (verifie
+                # avec pefile le 18/11/2026). L'appel historique levait un
+                # AttributeError avale par le try/except : le port n'a donc
+                # jamais ete libere explicitement, et ca fonctionne ainsi
+                # depuis des mois. call_optional rend ce non-appel explicite.
+                from .dnp_dll import call_optional
+                call_optional(self.dll, "PortRelease", self.h_port)
             self.h_port = -1
 
 
@@ -240,6 +323,11 @@ class PrinterCounterWatcher:
         self._history = deque(maxlen=400)  # ~20 min a 3s
         # Memo des transactions deja resolues pour eviter logs en double
         self._resolved = set()
+        # Transactions laissees en attente faute de compteur lisible. Sert
+        # uniquement a ne journaliser le cas qu'une fois par transaction :
+        # elles restent volontairement HORS de _resolved pour etre
+        # reexaminees aux ticks suivants si le compteur redevient lisible.
+        self._sans_preuve = set()
         # Callback declenche quand le compteur baisse (impression physique detectee)
         self._on_print_started = on_print_started
         # printer_events : derniere valeur de statut connue (pour detecter les
@@ -725,6 +813,43 @@ class PrinterCounterWatcher:
                 last_known = counter_now
                 if last_known is None and self._history:
                     last_known = self._history[-1][1]
+
+                # PAS DE PREUVE, PAS D'ACCUSATION.
+                # Jusqu'ici, faute de compteur on accusait quand meme : on
+                # patchait anomalie='non_delivree' et on envoyait un SMS sans
+                # la moindre donnee. C'est ce qui a produit les 13 fausses
+                # alertes de MB-50 entre le 15 et le 18/11, ou le compteur de
+                # la RX1 etait illisible (feuilles_avant ET feuilles_apres a
+                # NULL sur les 13 transactions).
+                #
+                # Lire le compteur a 122 avant et 122 apres, c'est une preuve.
+                # Ne rien avoir lu du tout, c'en est l'exact oppose. On se
+                # tait : la transaction reste en attente et sera reexaminee
+                # aux ticks suivants, jusqu'a sortir de la fenetre de
+                # TX_LOOKBACK_S. Mieux vaut rater une vraie panne que crier au
+                # loup — un gerant qui recoit des SMS injustifies finit par
+                # tous les ignorer, y compris les vrais.
+                #
+                # Reste expose : l'imprimante en veille renvoie 0, filtre en
+                # None. C'est le cas sur la RX1, dont la veille firmware n'est
+                # pas desactivable (CyStat64 n'expose ni GetStandbyTime ni
+                # SetStandbyTime). Ce garde est donc ce qui la protege des
+                # fausses alertes nocturnes.
+                if last_known is None:
+                    if tx_id not in self._sans_preuve:
+                        self._sans_preuve.add(tx_id)
+                        try:
+                            import activity_logger as alog
+                            alog.log_generic(
+                                "PRINTER_COUNTER",
+                                f"phase4 SANS PREUVE tx={tx_id[:8]} "
+                                f"deadline depassee de {ecart-FENETRE_VERIFICATION_S:.0f}s "
+                                f"mais aucun compteur lu -> pas d'alerte",
+                            )
+                        except Exception:
+                            pass
+                    continue
+
                 data = {"anomalie_impression": "non_delivree"}
                 if last_known is not None:
                     data["feuilles_apres"] = last_known

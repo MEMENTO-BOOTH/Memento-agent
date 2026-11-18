@@ -96,18 +96,43 @@ def _open_ds620():
         # Trouver tous les ports DS620 dans le registre
         reg_path = r"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Print\Printers"
         candidats = []
+        # Ports occupes par une DNP qui n'est PAS une DS620. Le balayage
+        # aveugle plus bas ne doit JAMAIS les toucher : y appeler Cx2Stat64
+        # revient a parler a une imprimante avec la bibliotheque d'une autre
+        # famille, ce qui a tue le process agent en v1.0.28.9 (MB-50).
+        ports_interdits = set()
+        from .alertes.constants import is_dnp_printer, get_printer_dll
         with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, reg_path) as key:
             for i in range(100):
+                # EnumKey leve OSError quand i depasse le nombre de clefs =
+                # fin legitime de l'enumeration -> break. Mais un OSError sur
+                # OpenKey/QueryValueEx d'une imprimante au registre atypique
+                # ("Microsoft Print to PDF") doit juste faire sauter CETTE
+                # entree : sinon la vraie DNP enumeree APRES n'est jamais vue
+                # (meme bug que le fix Les Follies du 06/11).
                 try:
                     name = winreg.EnumKey(key, i)
-                    if _is_ds620(name):
-                        with winreg.OpenKey(
-                            winreg.HKEY_LOCAL_MACHINE, f"{reg_path}\\{name}"
-                        ) as pk:
-                            port, _ = winreg.QueryValueEx(pk, "Port")
-                            candidats.append(port)
                 except OSError:
                     break
+                try:
+                    with winreg.OpenKey(
+                        winreg.HKEY_LOCAL_MACHINE, f"{reg_path}\\{name}"
+                    ) as pk:
+                        port, _ = winreg.QueryValueEx(pk, "Port")
+                        try:
+                            driver, _ = winreg.QueryValueEx(pk, "Printer Driver")
+                        except OSError:
+                            driver = ""
+                except OSError:
+                    continue
+                # Le driver du registre prime sur le nom affiche, librement
+                # editable par l'exploitant (MB-50 : imprimante nommee
+                # "DS-RX1" tout court).
+                if _is_ds620(name) or _is_ds620(driver):
+                    candidats.append(port)
+                elif is_dnp_printer(name) or is_dnp_printer(driver):
+                    if get_printer_dll(name, driver) != "Cx2Stat64.dll":
+                        ports_interdits.add(port)
 
         # Tester chaque port : prendre celui qui repond
         seen = set()
@@ -120,9 +145,18 @@ def _open_ds620():
                 status = dll.GetStatus(h)
                 if status != 0x80000000:
                     return dll, h
-        # Fallback : USB001..USB004 directement
+        # Fallback : USB001..USB004 directement, pour les DS620 dont l'entree
+        # registre ne matche aucun motif connu (imprimante renommee).
+        #
+        # v1.0.28.30 : on saute les ports revendiques par une DNP qui n'est
+        # PAS une DS620. Sans ce filtre, sur MB-50 (seule entree registre :
+        # "DS-RX1" sur USB003), candidats restait vide et ce balayage appelait
+        # Cx2Stat64.PortInitialize sur une DS-RX1 a CHAQUE demarrage de
+        # l'agent — puis GetStandbyTime/SetStandbyTime, deux fonctions que
+        # CyStat64 n'expose meme pas. C'est le seul chemin du genre qui
+        # s'execute a coup sur au boot, et il n'etait couvert par aucun garde.
         for port in ("USB001", "USB002", "USB003", "USB004"):
-            if port in seen:
+            if port in seen or port in ports_interdits:
                 continue
             h = dll.PortInitialize(port)
             if h >= 0:
