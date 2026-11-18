@@ -1100,16 +1100,65 @@ class DashboardWindow(QMainWindow):
         except Exception as e:
             print(f"[DASHBOARD] monitoring update error: {e}")
 
+    @staticmethod
+    def _capacite_en_cache():
+        """Capacite papier de la derniere lecture imprimante reussie du
+        monitoring, ou None. Simple lecture d'un cache, ne leve jamais."""
+        try:
+            from monitoring.collectors.heartbeat import _PRINTER_LAST_OK
+            derniere = _PRINTER_LAST_OK[0]
+            return (derniere or {}).get("capacite_imprimante") or None
+        except Exception:
+            return None
+
+    def _maj_jauge_papier(self, feuilles, total):
+        """Met a jour la jauge papier et son libelle "% utilises".
+
+        Le pourcentage est borne a [0, 100] pour le gerant : un compteur
+        superieur a la capacite affichait sinon un pourcentage NEGATIF.
+        Mais ce negatif etait aussi le seul symptome visible d'une capacite
+        fausse — c'est lui qui a revele le 430/400 de MB-50. On ne le perd
+        donc pas : il est trace dans alertes.log, une fois par couple
+        (feuilles, capacite), pour rester visible a distance."""
+        self._donut.value = feuilles
+        self._donut.total = total
+        self._donut.update()
+        pct = int((1 - feuilles / total) * 100) if total > 0 else 0
+        if total > 0 and feuilles > total:
+            signature = (feuilles, total)
+            if getattr(self, "_depassement_trace", None) != signature:
+                self._depassement_trace = signature
+                try:
+                    import activity_logger as alog
+                    alog.log_generic(
+                        "DASHBOARD",
+                        f"jauge papier incoherente : {feuilles} feuilles pour une "
+                        f"capacite de {total} -> capacite du modele probablement fausse",
+                    )
+                except Exception:
+                    pass
+        self._lbl_pct.setText(f"{max(0, min(100, pct))} % utilisés")
+
     def _apply_monitoring(self, donnees):
         # Papier
         feuilles = donnees.get("feuilles_restantes")
         if feuilles is not None:
-            total = 400
-            self._donut.value = feuilles
-            self._donut.total = total
-            self._donut.update()
-            pct = int((1 - feuilles / total) * 100) if total > 0 else 0
-            self._lbl_pct.setText(f"{pct} % utilisés")
+            # Capacite du modele detecte, calculee par le collector a partir
+            # du NOM affiche de l'imprimante (get_media_capacity) : 400 pour
+            # une DS620, 700 pour une DS-RX1. Attention, contrairement au
+            # choix de la DLL, le driver n'est pas consulte ici : une RX1
+            # renommee sans "DS-RX1" dans son nom retomberait sur 400 (MB-50
+            # s'appelle bien "DS-RX1", verifie le 18/11/2026). Le cas serait
+            # trace dans alertes.log par _maj_jauge_papier.
+            # Cette capacite etait ignoree au profit d'un 400 en dur,
+            # invisible tant que tout le parc etait en DS620 (MB-50 affichait
+            # 430/400, soit -7 % utilises).
+            total = donnees.get("capacite_imprimante") or 400
+            # Retenue pour le rafraichissement Supabase (_apply_data) :
+            # la table heartbeats ne stocke ni la capacite ni le nom de
+            # l'imprimante, ce chemin-la retomberait sinon sur 400.
+            self._capacite_locale = total
+            self._maj_jauge_papier(feuilles, total)
 
         # WiFi
         ssid = donnees.get("ssid_wifi")
@@ -1254,20 +1303,22 @@ class DashboardWindow(QMainWindow):
             if feuilles is not None:
                 # Capacite dynamique selon le modele d'imprimante (DS620=400,
                 # DS-RX1=700, DS820=230, DS40=400, DS80=260, QW410=230).
-                # Prend d'abord la valeur du heartbeat si fournie, sinon
-                # recalcule a partir du nom.
-                total = hb.get("capacite_imprimante")
+                #
+                # ATTENTION : hb vient de Supabase, dont la table heartbeats
+                # n'a NI capacite_imprimante NI nom_imprimante (exclus du
+                # payload, cf. envoyer_heartbeat). Les deux lectures ci-dessous
+                # rendent donc None, et get_media_capacity(None) rend 400 :
+                # ce chemin affichait 400 pour toutes les bornes. On prend
+                # d'abord la capacite connue localement, que le monitoring a
+                # calculee a partir de l'imprimante reellement detectee.
+                total = hb.get("capacite_imprimante") or self._capacite_locale
                 if not total:
                     try:
                         from monitoring.alertes.constants import get_media_capacity
                         total = get_media_capacity(hb.get("nom_imprimante"))
                     except Exception:
                         total = 400
-                self._donut.value = feuilles
-                self._donut.total = total
-                self._donut.update()
-                pct = int((1 - feuilles / total) * 100) if total > 0 else 0
-                self._lbl_pct.setText(f"{pct} % utilisés")
+                self._maj_jauge_papier(feuilles, total)
 
             ssid = hb.get("ssid_wifi")
             if ssid:
@@ -1678,6 +1729,13 @@ class DashboardWindow(QMainWindow):
         pl.setContentsMargins(16, 12, 16, 12)
         pl.setSpacing(12)
         self._donut = DonutChart(0, 400)
+        # Capacite papier du modele detecte localement (400 DS620, 700 RX1).
+        # La fenetre est recreee a chaque deverrouillage par PIN, alors que le
+        # monitoring tourne depuis le demarrage de l'agent : on reprend la
+        # derniere lecture qu'il a mise en cache. Sans ca, le chargement
+        # Supabase (quelques secondes) passait avant le premier cycle de
+        # monitoring (jusqu'a 60 s) et la RX1 affichait 400 entre-temps.
+        self._capacite_locale = self._capacite_en_cache()
         pl.addWidget(self._donut)
 
         txt = QVBoxLayout()

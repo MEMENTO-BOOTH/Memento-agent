@@ -635,6 +635,100 @@ def test_imprimante_dll_hors_payload_heartbeat():
     print("[OK] heartbeat : imprimante_dll exclu du payload Supabase")
 
 
+def test_jauge_papier_capacite_rx1():
+    """Constate sur MB-50 le 18/11/2026 apres installation de la 1.0.28.30 :
+    la jauge affichait 430/400, alors que la RX1 a des rouleaux de 700.
+
+    Deux chemins mettent a jour la jauge, et les deux forcaient 400 :
+      - le temps reel (_apply_monitoring) avait 400 ecrit en dur, alors que
+        la bonne capacite (700) arrivait dans les donnees ;
+      - le rafraichissement Supabase (_apply_data) relisait la capacite
+        dans la table heartbeats, qui ne la stocke pas -> 400 par defaut,
+        ce qui ecrasait la bonne valeur a chaque rafraichissement.
+    Invisible tant que tout le parc etait en DS620, qui fait justement 400."""
+    import dashboard
+
+    class _Faux:
+        """Juste ce que lisent les deux gestionnaires de la fenetre."""
+        def __init__(self):
+            self._donut = MagicMock()
+            self._lbl_pct = MagicMock()
+            self._capacite_locale = None
+            self._maj_jauge_papier = (
+                lambda f, t: dashboard.DashboardWindow._maj_jauge_papier(self, f, t))
+
+    W = dashboard.DashboardWindow
+
+    # 1. RX1, temps reel : 430 sur 700, et non 430 sur 400.
+    fen = _Faux()
+    W._apply_monitoring(fen, {"feuilles_restantes": 430, "capacite_imprimante": 700})
+    assert fen._donut.total == 700, f"capacite RX1 attendue 700, got {fen._donut.total}"
+    assert fen._lbl_pct.setText.call_args[0][0] == "38 % utilisés"
+
+    # 2. Le rafraichissement Supabase ne doit plus ecraser 700 par 400 : la
+    #    ligne heartbeats n'a ni capacite ni nom d'imprimante. On appelle le
+    #    VRAI gestionnaire, sur une fenetre factice qui absorbe tous les
+    #    autres widgets qu'il met a jour.
+    #
+    #    ISOLATION : _apply_data cherche aussi un logo local dans
+    #    ~/.mementoagent et le charge avec QPixmap — fatal sans QApplication,
+    #    le processus meurt sans trace (0xC0000409). Il lit aussi le wifi
+    #    reel si le heartbeat n'a pas de ssid. On lui donne donc un dossier
+    #    personnel vide et un ssid.
+    import tempfile
+    with tempfile.TemporaryDirectory() as home_vide,          patch("os.path.expanduser", return_value=home_vide):
+        def _charger(capacite_locale, feuilles):
+            fen_sb = MagicMock()
+            fen_sb._capacite_locale = capacite_locale
+            W._apply_data(fen_sb, {"heartbeat": {
+                "feuilles_restantes": feuilles, "ssid_wifi": "test"}})
+            return fen_sb
+
+        _charger(700, 430)._maj_jauge_papier.assert_called_with(430, 700)
+
+        # 2bis. Fenetre ouverte avant tout cycle de monitoring ET sans cache :
+        #       comportement d'avant (400), sans planter.
+        _charger(None, 342)._maj_jauge_papier.assert_called_with(342, 400)
+
+    # 2ter. Fenetre recreee apres un deverrouillage par PIN : le monitoring
+    #       tourne deja et a mis la derniere lecture en cache. La capacite
+    #       doit etre connue des l'ouverture, sans attendre son prochain cycle
+    #       (jusqu'a 60 s pendant lesquels la RX1 affichait encore 400).
+    from monitoring.collectors import heartbeat as hb_mod
+    with patch.object(hb_mod, "_PRINTER_LAST_OK",
+                      [{"capacite_imprimante": 700, "feuilles_restantes": 430}]):
+        assert W._capacite_en_cache() == 700
+    with patch.object(hb_mod, "_PRINTER_LAST_OK", [None]):
+        assert W._capacite_en_cache() is None, "aucune lecture encore : None"
+
+    # 3. DS620 : strictement inchange.
+    fen = _Faux()
+    W._apply_monitoring(fen, {"feuilles_restantes": 342, "capacite_imprimante": 400})
+    assert fen._donut.total == 400
+    assert fen._lbl_pct.setText.call_args[0][0] == "14 % utilisés"
+
+    # 4. Donnees sans capacite (ancien cache heartbeat) : 400 comme avant.
+    fen = _Faux()
+    W._apply_monitoring(fen, {"feuilles_restantes": 342})
+    assert fen._donut.total == 400
+
+    # 5. Plus jamais de pourcentage negatif a l'ecran (MB-50 affichait -7 %).
+    #    Mais l'incoherence n'est pas perdue : c'est le "-7 %" qui avait
+    #    revele le bug de MB-50. Elle doit atterrir dans alertes.log (les
+    #    print() sont perdus sur les bornes), une seule fois par valeur.
+    fen = _Faux()
+    with patch("activity_logger.log_generic") as log:
+        fen._maj_jauge_papier(430, 400)
+        fen._maj_jauge_papier(430, 400)   # meme valeur : pas de doublon
+        fen._maj_jauge_papier(342, 400)   # coherent : rien a tracer
+    assert fen._lbl_pct.setText.call_args[0][0] == "14 % utilisés"
+    assert log.call_count == 1, f"une seule trace attendue, got {log.call_count}"
+    assert "430" in log.call_args[0][1] and "400" in log.call_args[0][1]
+    fen._maj_jauge_papier(430, 400)
+    assert fen._lbl_pct.setText.call_args[0][0] == "0 % utilisés"
+    print("[OK] jauge papier : RX1 430/700 (38 %), DS620 inchangee, plus de % negatif")
+
+
 def test_selection_dll_table():
     """Table de verite du selecteur, independamment du registre."""
     cas = [
@@ -767,4 +861,5 @@ if __name__ == "__main__":
     test_printer_standby_ne_touche_pas_la_rx1()
     test_printer_standby_trouve_encore_les_ds620()
     test_imprimante_dll_hors_payload_heartbeat()
+    test_jauge_papier_capacite_rx1()
     print("\nTous les tests RX1 OK !")
